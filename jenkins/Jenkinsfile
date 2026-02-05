@@ -94,7 +94,56 @@ pipeline {
             }
         }
         
-        // PLACEHOLDER FOR BYTE 5: Release Stage (Will only run if we get here)
+        // 5. BUILD & RELEASE (Only runs if all tests pass)
+        stage('Build & Release') {
+            steps {
+                script {
+                    echo "Tests Passed. Starting Release Process for version ${env.BUILD_VERSION}..."
+                    
+                    // A. Login to DockerHub and Push Image
+                    withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                        sh '''
+                            echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
+                            
+                            # Build the image using the App Dockerfile
+                            docker build -t $DOCKER_USER/devops-exercise:${BUILD_VERSION} -f docker/Dockerfile .
+                            
+                            # Push specific version
+                            docker push $DOCKER_USER/devops-exercise:${BUILD_VERSION}
+                            
+                            # Tag and push 'latest' as well
+                            docker tag $DOCKER_USER/devops-exercise:${BUILD_VERSION} $DOCKER_USER/devops-exercise:latest
+                            docker push $DOCKER_USER/devops-exercise:latest
+                        '''
+                    }
+                    
+                    // B. Create GitHub Release (which automatically tags the repo)
+                    withCredentials([string(credentialsId: 'github-token', variable: 'GITHUB_TOKEN')]) {
+                        // Prepare the JSON payload for GitHub API
+                        def jsonPayload = """
+                            {
+                              "tag_name": "v${env.BUILD_VERSION}",
+                              "target_commitish": "dev",
+                              "name": "v${env.BUILD_VERSION}",
+                              "body": "Automated release from Jenkins Build #${env.BUILD_NUMBER}. Includes Docker Image: ${env.BUILD_VERSION}",
+                              "draft": false,
+                              "prerelease": false
+                            }
+                        """
+                        writeFile file: 'release.json', text: jsonPayload
+                        
+                        // Execute API Call
+                        sh '''
+                            curl -X POST \
+                            -H "Authorization: token ${GITHUB_TOKEN}" \
+                            -H "Accept: application/vnd.github.v3+json" \
+                            https://api.github.com/repos/Tomer-ui/Devops-ci-cd-exercise/releases \
+                            -d @release.json
+                        '''
+                    }
+                }
+            }
+        }
     }
     
     post {
