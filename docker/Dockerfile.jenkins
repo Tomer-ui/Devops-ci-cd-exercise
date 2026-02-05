@@ -1,0 +1,28 @@
+# Start from the official Long Term Support (LTS) Jenkins image
+FROM jenkins/jenkins:lts
+
+# Switch to root user to install system packages
+USER root
+
+# 1. Install system tools, Python 3, and Firefox (for E2E tests)
+# We use firefox-esr because it is stable on Debian (Jenkins base OS)
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    python3-venv \
+    firefox-esr \
+    wget \
+    curl \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. Install Docker CLI
+# This allows Jenkins to run "docker build" commands by talking to your host Docker
+RUN curl -fsSL https://get.docker.com -o get-docker.sh && sh get-docker.sh
+
+# 3. Add the 'jenkins' user to the 'docker' group
+# (This helps avoid permission issues when accessing /var/run/docker.sock)
+RUN usermod -aG docker jenkins
+
+# Switch back to the standard jenkins user for security
+USER jenkins
