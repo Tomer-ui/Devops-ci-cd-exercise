@@ -72,7 +72,11 @@ class TestWebInterface:
     def test_page_loads_successfully(self, driver, app_server):
         driver.get(app_server)
         
-        assert "DevOps Testing Application" in driver.title
+        #COMMENTED for reports...
+        #assert "DevOps Testing Application" in driver.title
+
+        #THIS LINE IS WRONG IN PURPOSE !
+        assert "Banana" in driver.title
         
         h1_element = driver.find_element(By.TAG_NAME, "h1")
         assert "DevOps Testing Application" in h1_element.text
