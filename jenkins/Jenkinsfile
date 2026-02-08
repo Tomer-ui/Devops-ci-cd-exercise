@@ -148,17 +148,38 @@ pipeline {
     
     post {
         always {
-            // This runs regardless of success/failure so you can see WHAT failed
+            // HTML Reports (Existing code)
             publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'unit_report.html', reportName: 'Unit Test Report'])
             publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'integration_report.html', reportName: 'Integration Test Report'])
             publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'e2e_report.html', reportName: 'E2E Test Report'])
             publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'performance_report.html', reportName: 'Performance Report'])
         }
         
-        // PLACEHOLDER FOR BYTE 6: Failure Notification
-        // failure {
-        //     slackSend ...
-        //     jiraSend ...
-        // }
+        success {
+            // Send Green Message to Slack
+            slackSend (
+                color: '#00FF00', 
+                message: "✅ SUCCESS: Build #${env.BUILD_NUMBER} (${env.BUILD_VERSION}) passed! \nArtifact pushed to DockerHub.\nSee: ${env.BUILD_URL}"
+            )
+        }
+        
+        failure {
+            // 1. Send Red Message to Slack
+            slackSend (
+                color: '#FF0000', 
+                message: "❌ FAILURE: Build #${env.BUILD_NUMBER} failed.\nSee report: ${env.BUILD_URL}"
+            )
+            
+            // 2. Open Jira Ticket
+            
+            jiraNewIssue (
+                site: 'JiraLocal', 
+                issue: [
+                    project: [ key: 'DEV' ], 
+                    summary: "Build Failure: DevOps-Exercise #${env.BUILD_NUMBER}", 
+                    description: "The build failed. \nVersion: ${env.BUILD_VERSION}\nLink: ${env.BUILD_URL}",
+                    issuetype: [ name: 'Bug' ]
+                ]
+            )
+        }
     }
-}
