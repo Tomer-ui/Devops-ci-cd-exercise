@@ -58,7 +58,7 @@ pipeline {
             }
         }
 
-        // 3. E2E TESTS (Only runs if Integration passes)
+        // 3. E2E TESTS (Only runs if Integration passes) [ dont forget to make sure the system has sudo apt install -y firefox-esr geckodriver !]
         stage('E2E Tests') {
             steps {
                 sh '''

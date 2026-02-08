@@ -1,3 +1,6 @@
+# install on ur system :
+#sudo add-apt-repository ppa:mozillateam/ppa
+#sudo apt install -y firefox-esr geckodriver
 import pytest
 import time
 import json
@@ -6,9 +9,9 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.firefox.service import Service
+#from selenium.webdriver.firefox.service import Service  #opted to install on system
 from selenium.webdriver.firefox.options import Options
-from webdriver_manager.firefox import GeckoDriverManager
+#from webdriver_manager.firefox import GeckoDriverManager #opted to install on system
 from app import create_app
 import threading
 
@@ -34,25 +37,35 @@ def driver(app_server):
     firefox_options.add_argument("--no-sandbox")
     firefox_options.add_argument("--disable-dev-shm-usage")
     
-    try:
-        service = Service(GeckoDriverManager().install())
-        driver = webdriver.Firefox(service=service, options=firefox_options)
-    except OSError as e:
-        # Handle exec format error by trying to find system geckodriver
-        if "Exec format error" in str(e):
-            # Try to use system geckodriver if available
-            try:
-                driver = webdriver.Firefox(options=firefox_options)
-            except Exception:
-                pytest.skip("GeckoDriver not available or incompatible")
-        else:
-            raise e
-    
+    # Fail fast if Firefox / geckodriver is missing
+    driver = webdriver.Firefox(options=firefox_options)
+
     driver.implicitly_wait(10)
-    
+
     yield driver
-    
+
     driver.quit()
+
+    #ORIGIN#  man those git api calls ran out fast... lel
+    # try:
+    #     service = Service(GeckoDriverManager().install())
+    #     driver = webdriver.Firefox(service=service, options=firefox_options)
+    # except OSError as e:
+    #     # Handle exec format error by trying to find system geckodriver
+    #     if "Exec format error" in str(e):
+    #         # Try to use system geckodriver if available
+    #         try:
+    #             driver = webdriver.Firefox(options=firefox_options)
+    #         except Exception:
+    #             pytest.skip("GeckoDriver not available or incompatible")
+    #     else:
+    #         raise e
+    
+    # driver.implicitly_wait(10)
+    
+    # yield driver
+    
+    # driver.quit()
 
 
 class TestWebInterface:
