@@ -73,10 +73,10 @@ class TestWebInterface:
         driver.get(app_server)
         
         #COMMENTED for reports...
-        assert "DevOps Testing Application" in driver.title
+        #assert "DevOps Testing Application" in driver.title
 
         #THIS LINE IS WRONG IN PURPOSE !
-        #assert "Banana" in driver.title
+        assert "Banana" in driver.title
         
         h1_element = driver.find_element(By.TAG_NAME, "h1")
         assert "DevOps Testing Application" in h1_element.text
