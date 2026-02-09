@@ -123,14 +123,20 @@ pipeline {
         
         failure {
             script {
-                // Correctly formatted report links
+                
+                // Main project page for Stage View
+                def projectDashboard = "${env.JOB_URL}"
+
+                // Specific report links for this specific failed build
                 def unitUrl = "${env.BUILD_URL}Unit_20Test_20Report/"
                 def intUrl = "${env.BUILD_URL}Integration_20Test_20Report/"
                 def e2eUrl = "${env.BUILD_URL}E2E_20Test_20Report/"
 
                 slackSend (
                     color: '#FF0000', 
-                    message: "❌ FAILURE: Build #${env.BUILD_NUMBER}.\nBroken at stage. Reports: \nUnit: ${unitUrl}\nIntegration: ${intUrl}\nE2E: ${e2eUrl}"
+                    message: "❌ FAILURE: Build #${env.BUILD_NUMBER} stopped.\n" +
+                             "📊 View Stage View Dashboard: ${projectDashboard}\n" +
+                             "🔍 Reports: \nUnit: ${unitUrl} | Integration: ${intUrl} | E2E: ${e2eUrl}"
                 )
                 
                 jiraNewIssue (
@@ -139,7 +145,9 @@ pipeline {
                         fields: [
                             project: [ key: 'DEV' ], 
                             summary: "Build Failure: DevOps-Exercise #${env.BUILD_NUMBER}", 
-                            description: "Pipeline stopped due to a failure. Review the Stage View here: ${env.BUILD_URL}",
+                            description: "The pipeline stopped due to a failure.\n\n" +
+                                         "Check the Stage View Dashboard: ${projectDashboard}\n" +
+                                         "Direct Link to Build #${env.BUILD_NUMBER}: ${env.BUILD_URL}",
                             issuetype: [ name: 'Bug' ]
                         ]
                     ]
