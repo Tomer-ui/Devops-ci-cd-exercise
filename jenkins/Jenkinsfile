@@ -152,13 +152,14 @@ pipeline {
                 jiraNewIssue (
                     site: 'JiraLocal', 
                     issue: [
-                        project: [ key: 'DEV' ], 
-                        summary: "Build Failure: DevOps-Exercise #${env.BUILD_NUMBER}", 
-                        description: "The pipeline stopped due to a failure.\n\n" +
-                                     "Direct Link: ${env.BUILD_URL}\n" +
-                                     "E2E Report: ${e2eUrl}",
-                        issuetype: [ name: 'Bug' ]
+                        fields: [
+                            project: [ key: 'DEV' ], 
+                            summary: "Build Failure: DevOps-Exercise #${env.BUILD_NUMBER}", 
+                            description: "The pipeline stopped due to a failure.\n\nCheck the Stage View Dashboard: ${projectDashboard}\nDirect Link to Build #${env.BUILD_NUMBER}: ${env.BUILD_URL}",
+                            issuetype: [ name: 'Bug' ]
+                        ]
                     ]
+
                 )
             }
         }
