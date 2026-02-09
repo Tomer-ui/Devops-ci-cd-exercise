@@ -155,20 +155,32 @@ pipeline {
         }
         
         failure {
+
+            // Calculate specific report URLs
+            // Note: HTML Publisher replaces spaces with %20 or underscores. 
+            // Usually, specific report plugins use the Report Name you defined.
+            def unitReportUrl = "${env.BUILD_URL}Unit_20Test_20Report/"
+            def e2eReportUrl = "${env.BUILD_URL}E2E_20Test_20Report/"
+
+            // 1. Send Red Message to Slack with DIRECT LINKS
             slackSend (
                 color: '#FF0000', 
-                message: "❌ FAILURE: Build #${env.BUILD_NUMBER} failed.\nSee report: ${env.BUILD_URL}"
+                message: "❌ FAILURE: Build #${env.BUILD_NUMBER}.\n" +
+                         "🔍 Unit Report: ${unitReportUrl} \n" +
+                         "📸 E2E Report: ${e2eReportUrl} \n" +
+                         "🏠 Main Build: ${env.BUILD_URL}"
             )
             
             jiraNewIssue (
                 site: 'JiraLocal', 
-                issue: [
-                    fields: [
-                        project: [ key: 'DEV' ],  
-                        summary: "Build Failure: DevOps-Exercise #${env.BUILD_NUMBER}", 
-                        description: "The build failed.\nVersion: ${env.BUILD_VERSION}\nLink: ${env.BUILD_URL}",
-                        issuetype: [ name: 'Bug' ]
-                    ]
+                     issue: [
+                    project: [ key: 'DEV' ], 
+                    summary: "Build Failure: DevOps-Exercise #${env.BUILD_NUMBER}", 
+                    description: "The build failed.\n\n" +
+                                 "Unit Report: ${unitReportUrl}\n" +
+                                 "E2E Report: ${e2eReportUrl}\n" +
+                                 "Main Page: ${env.BUILD_URL}",
+                    issuetype: [ name: 'Bug' ]
                 ]
             )
         }
