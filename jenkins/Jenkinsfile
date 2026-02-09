@@ -11,7 +11,6 @@ pipeline {
             steps {
                 script {
                     sh "mkdir -p ${REPORTS_DIR}"
-                    // Calculate Version
                     def newVersion = sh(script: "python3 scripts/semver.py", returnStdout: true).trim()
                     env.BUILD_VERSION = newVersion
                     currentBuild.displayName = "#${env.BUILD_NUMBER} (${newVersion})"
@@ -30,11 +29,11 @@ pipeline {
             }
         }
         
+        // 1. UNIT TESTS - Must pass to proceed
         stage('Unit Tests') {
             steps {
                 sh '''
                     . ${VENV}/bin/activate
-                    echo "Running Unit Tests..."
                     pytest tests/unit \
                         --cov=app \
                         --cov-report=html:${REPORTS_DIR}/coverage \
@@ -44,11 +43,11 @@ pipeline {
             }
         }
 
+        // 2. INTEGRATION TESTS - Only runs if Unit Tests passed
         stage('Integration Tests') {
             steps {
                 sh '''
                     . ${VENV}/bin/activate
-                    echo "Running Integration Tests..."
                     pytest tests/integration \
                         --html=${REPORTS_DIR}/integration_report.html \
                         --self-contained-html
@@ -56,11 +55,11 @@ pipeline {
             }
         }
 
+        // 3. E2E TESTS - Only runs if Integration Tests passed
         stage('E2E Tests') {
             steps {
                 sh '''
                     . ${VENV}/bin/activate
-                    echo "Running E2E Tests..."
                     pytest tests/e2e \
                         --html=${REPORTS_DIR}/e2e_report.html \
                         --self-contained-html
@@ -68,23 +67,15 @@ pipeline {
             }
         }
 
+        // 4. PERFORMANCE TESTS - Only runs if E2E Tests passed
         stage('Performance Tests') {
             steps {
                 sh '''
                     . ${VENV}/bin/activate
-                    echo "Running Performance Tests..."
                     python3 main.py &
                     APP_PID=$!
                     sleep 3
-                    
-                    locust -f tests/performance/locustfile.py \
-                        --headless \
-                        --users 5 \
-                        --spawn-rate 1 \
-                        --run-time 10s \
-                        --host http://localhost:5000 \
-                        --html ${REPORTS_DIR}/performance_report.html
-                        
+                    locust -f tests/performance/locustfile.py --headless --users 5 --spawn-rate 1 --run-time 10s --host http://localhost:5000 --html ${REPORTS_DIR}/performance_report.html
                     kill $APP_PID
                 '''
             }
@@ -93,10 +84,7 @@ pipeline {
         stage('Build & Release') {
             steps {
                 script {
-                    echo "Tests Passed. Starting Release Process for version ${env.BUILD_VERSION}..."
-                    
                     withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                        // Use double quotes for the shell script to allow Groovy variable interpolation for ${env.BUILD_VERSION}
                         sh """
                             echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin
                             docker build -t \$DOCKER_USER/devops-exercise:${env.BUILD_VERSION} -f docker/Dockerfile .
@@ -118,14 +106,7 @@ pipeline {
                             }
                         """
                         writeFile file: 'release.json', text: jsonPayload
-                        
-                        sh '''
-                            curl -X POST \
-                            -H "Authorization: token ${GITHUB_TOKEN}" \
-                            -H "Accept: application/vnd.github.v3+json" \
-                            -https://api.github.com/repos/Tomer-ui/Devops-ci-cd-exercise/releases \
-                            -d @release.json
-                        '''
+                        sh "curl -X POST -H 'Authorization: token ${GITHUB_TOKEN}' -H 'Accept: application/vnd.github.v3+json' https://api.github.com/repos/Tomer-ui/Devops-ci-cd-exercise/releases -d @release.json"
                     }
                 }
             }
@@ -140,25 +121,16 @@ pipeline {
             publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'performance_report.html', reportName: 'Performance Report'])
         }
         
-        success {
-            slackSend (
-                color: '#00FF00', 
-                message: "✅ SUCCESS: Build #${env.BUILD_NUMBER} (${env.BUILD_VERSION}) passed! \nSee: ${env.BUILD_URL}"
-            )
-        }
-        
         failure {
             script {
-                // Variables must be inside a script block in the post section
-                def unitReportUrl = "${env.BUILD_URL}Unit_20Test_20Report/"
-                def e2eReportUrl = "${env.BUILD_URL}E2E_20Test_20Report/"
+                // Correctly formatted report links
+                def unitUrl = "${env.BUILD_URL}Unit_20Test_20Report/"
+                def intUrl = "${env.BUILD_URL}Integration_20Test_20Report/"
+                def e2eUrl = "${env.BUILD_URL}E2E_20Test_20Report/"
 
                 slackSend (
                     color: '#FF0000', 
-                    message: "❌ FAILURE: Build #${env.BUILD_NUMBER}.\n" +
-                             "🔍 Unit Report: ${unitReportUrl} \n" +
-                             "📸 E2E Report: ${e2eReportUrl} \n" +
-                             "🏠 Main Build: ${env.BUILD_URL}"
+                    message: "❌ FAILURE: Build #${env.BUILD_NUMBER}.\nBroken at stage. Reports: \nUnit: ${unitUrl}\nIntegration: ${intUrl}\nE2E: ${e2eUrl}"
                 )
                 
                 jiraNewIssue (
@@ -167,7 +139,7 @@ pipeline {
                         fields: [
                             project: [ key: 'DEV' ], 
                             summary: "Build Failure: DevOps-Exercise #${env.BUILD_NUMBER}", 
-                            description: "The build failed.\n\nUnit Report: ${unitReportUrl}\nE2E Report: ${e2eReportUrl}\nMain Page: ${env.BUILD_URL}",
+                            description: "Pipeline stopped due to a failure. Review the Stage View here: ${env.BUILD_URL}",
                             issuetype: [ name: 'Bug' ]
                         ]
                     ]
