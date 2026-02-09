@@ -6,15 +6,15 @@ pipeline {
         REPORTS_DIR = "${WORKSPACE}/reports"
     }
     
-    // You were missing this wrapper!
+    
     stages { 
         stage('Initialize') {
             steps {
                 script {
                     // This "Unlocks" the HTML reports for the current session
                     System.setProperty("hudson.model.DirectoryBrowserSupport.CSP", "")
-                    
-                    sh "mkdir -p ${REPORTS_DIR}"
+                }
+                sh "mkdir -p ${REPORTS_DIR}"
                     
                     // Calculate Version
                     def newVersion = sh(script: "python3 scripts/semver.py", returnStdout: true).trim()
