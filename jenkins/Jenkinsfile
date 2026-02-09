@@ -45,7 +45,7 @@ pipeline {
             }
         }
 
-        // 2. INTEGRATION TESTS (Only runs if Unit passes)
+        // 2. INTEGRATION TESTS
         stage('Integration Tests') {
             steps {
                 sh '''
@@ -58,12 +58,13 @@ pipeline {
             }
         }
 
-        // 3. E2E TESTS (Only runs if Integration passes) [ dont forget to make sure the system has sudo apt install -y firefox-esr geckodriver !]
+        // 3. E2E TESTS
         stage('E2E Tests') {
             steps {
                 sh '''
                     . ${VENV}/bin/activate
                     echo "Running E2E Tests..."
+                    # Ensure firefox/gecko are installed in the agent image
                     pytest tests/e2e \
                         --html=${REPORTS_DIR}/e2e_report.html \
                         --self-contained-html
@@ -71,7 +72,7 @@ pipeline {
             }
         }
 
-        // 4. PERFORMANCE TESTS (Only runs if E2E passes)
+        // 4. PERFORMANCE TESTS
         stage('Performance Tests') {
             steps {
                 sh '''
@@ -94,7 +95,7 @@ pipeline {
             }
         }
         
-        // 5. BUILD & RELEASE (Only runs if all tests pass)
+        // 5. BUILD & RELEASE
         stage('Build & Release') {
             steps {
                 script {
@@ -104,35 +105,27 @@ pipeline {
                     withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
                         sh '''
                             echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
-                            
-                            # Build the image using the App Dockerfile
                             docker build -t $DOCKER_USER/devops-exercise:${BUILD_VERSION} -f docker/Dockerfile .
-                            
-                            # Push specific version
                             docker push $DOCKER_USER/devops-exercise:${BUILD_VERSION}
-                            
-                            # Tag and push 'latest' as well
                             docker tag $DOCKER_USER/devops-exercise:${BUILD_VERSION} $DOCKER_USER/devops-exercise:latest
                             docker push $DOCKER_USER/devops-exercise:latest
                         '''
                     }
                     
-                    // B. Create GitHub Release (which automatically tags the repo)
+                    // B. Create GitHub Release
                     withCredentials([string(credentialsId: 'github-token', variable: 'GITHUB_TOKEN')]) {
-                        // Prepare the JSON payload for GitHub API
                         def jsonPayload = """
                             {
                               "tag_name": "v${env.BUILD_VERSION}",
                               "target_commitish": "dev",
                               "name": "v${env.BUILD_VERSION}",
-                              "body": "Automated release from Jenkins Build #${env.BUILD_NUMBER}. Includes Docker Image: ${env.BUILD_VERSION}",
+                              "body": "Automated release from Jenkins Build #${env.BUILD_NUMBER}",
                               "draft": false,
                               "prerelease": false
                             }
                         """
                         writeFile file: 'release.json', text: jsonPayload
                         
-                        // Execute API Call
                         sh '''
                             curl -X POST \
                             -H "Authorization: token ${GITHUB_TOKEN}" \
@@ -144,12 +137,10 @@ pipeline {
                 }
             }
         }
-    }
-}
-    
+    } 
+
     post {
         always {
-            // HTML Reports (Existing code)
             publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'unit_report.html', reportName: 'Unit Test Report'])
             publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'integration_report.html', reportName: 'Integration Test Report'])
             publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'e2e_report.html', reportName: 'E2E Test Report'])
@@ -157,21 +148,17 @@ pipeline {
         }
         
         success {
-            // Send Green Message to Slack
             slackSend (
                 color: '#00FF00', 
-                message: "✅ SUCCESS: Build #${env.BUILD_NUMBER} (${env.BUILD_VERSION}) passed! \nArtifact pushed to DockerHub.\nSee: ${env.BUILD_URL}"
+                message: "✅ SUCCESS: Build #${env.BUILD_NUMBER} (${env.BUILD_VERSION}) passed! \nSee: ${env.BUILD_URL}"
             )
         }
         
         failure {
-            // 1. Send Red Message to Slack
             slackSend (
                 color: '#FF0000', 
                 message: "❌ FAILURE: Build #${env.BUILD_NUMBER} failed.\nSee report: ${env.BUILD_URL}"
             )
-            
-            // 2. Open Jira Ticket
             
             jiraNewIssue (
                 site: 'JiraLocal', 
@@ -183,5 +170,5 @@ pipeline {
                 ]
             )
         }
-    }
-
+    } 
+} 
