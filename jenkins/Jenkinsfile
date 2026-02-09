@@ -163,10 +163,12 @@ pipeline {
             jiraNewIssue (
                 site: 'JiraLocal', 
                 issue: [
-                    project: [ key: 'DEV' ], 
-                    summary: "Build Failure: DevOps-Exercise #${env.BUILD_NUMBER}", 
-                    description: "The build failed. \nVersion: ${env.BUILD_VERSION}\nLink: ${env.BUILD_URL}",
-                    issuetype: [ name: 'Bug' ]
+                    fields: [
+                        project: [ key: 'DEV' ],  
+                        summary: "Build Failure: DevOps-Exercise #${env.BUILD_NUMBER}", 
+                        description: "The build failed.\nVersion: ${env.BUILD_VERSION}\nLink: ${env.BUILD_URL}",
+                        issuetype: [ name: 'Bug' ]
+                    ]
                 ]
             )
         }
