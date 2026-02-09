@@ -6,15 +6,14 @@ pipeline {
         REPORTS_DIR = "${WORKSPACE}/reports"
     }
     
-    
-    stages { 
+    stages {
         stage('Initialize') {
             steps {
                 script {
                     // This "Unlocks" the HTML reports for the current session
                     System.setProperty("hudson.model.DirectoryBrowserSupport.CSP", "")
-                }
-                sh "mkdir -p ${REPORTS_DIR}"
+                    
+                    sh "mkdir -p ${REPORTS_DIR}"
                     
                     // Calculate Version
                     def newVersion = sh(script: "python3 scripts/semver.py", returnStdout: true).trim()
@@ -113,7 +112,7 @@ pipeline {
                 }
             }
         }
-    } // End of stages wrapper
+    } 
 
     post {
         always {
@@ -132,9 +131,7 @@ pipeline {
 
                 slackSend (
                     color: '#FF0000', 
-                    message: "❌ FAILURE: Build #${env.BUILD_NUMBER} stopped.\n" +
-                             "📊 View Stage View Dashboard: ${projectDashboard}\n" +
-                             "🔍 Reports: \nUnit: ${unitUrl} | Integration: ${intUrl} | E2E: ${e2eUrl}"
+                    message: "❌ FAILURE: Build #${env.BUILD_NUMBER} stopped.\n📊 View Stage View Dashboard: ${projectDashboard}\n🔍 Reports: \nUnit: ${unitUrl} | Integration: ${intUrl} | E2E: ${e2eUrl}"
                 )
                 
                 jiraNewIssue (
@@ -143,12 +140,12 @@ pipeline {
                         fields: [
                             project: [ key: 'DEV' ], 
                             summary: "Build Failure: DevOps-Exercise #${env.BUILD_NUMBER}", 
-                            description: "Check the Stage View Dashboard: ${projectDashboard}\nDirect Link: ${env.BUILD_URL}",
+                            description: "The pipeline stopped due to a failure.\n\nCheck the Stage View Dashboard: ${projectDashboard}\nDirect Link to Build #${env.BUILD_NUMBER}: ${env.BUILD_URL}",
                             issuetype: [ name: 'Bug' ]
                         ]
                     ]
                 )
             }
         }
-    } 
-} 
+    }
+}
