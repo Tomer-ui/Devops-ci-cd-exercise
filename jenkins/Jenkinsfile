@@ -1,5 +1,10 @@
 pipeline {
-    agent any 
+    agent any
+
+    options {
+        // This keeps the volume lean by deleting old build history
+        buildDiscarder(logRotator(numToKeepStr: '10', artifactNumToKeepStr: '10'))
+    } 
     
     environment {
         VENV = "${WORKSPACE}/venv"
