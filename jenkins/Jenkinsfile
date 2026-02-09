@@ -6,7 +6,9 @@ pipeline {
         REPORTS_DIR = "${WORKSPACE}/reports"
     }
     
-    stage('Initialize') {
+    // You were missing this wrapper!
+    stages { 
+        stage('Initialize') {
             steps {
                 script {
                     // This "Unlocks" the HTML reports for the current session
@@ -33,7 +35,6 @@ pipeline {
             }
         }
         
-        // 1. UNIT TESTS - Must pass to proceed
         stage('Unit Tests') {
             steps {
                 sh '''
@@ -47,7 +48,6 @@ pipeline {
             }
         }
 
-        // 2. INTEGRATION TESTS - Only runs if Unit Tests passed
         stage('Integration Tests') {
             steps {
                 sh '''
@@ -59,7 +59,6 @@ pipeline {
             }
         }
 
-        // 3. E2E TESTS - Only runs if Integration Tests passed
         stage('E2E Tests') {
             steps {
                 sh '''
@@ -71,7 +70,6 @@ pipeline {
             }
         }
 
-        // 4. PERFORMANCE TESTS - Only runs if E2E Tests passed
         stage('Performance Tests') {
             steps {
                 sh '''
@@ -115,7 +113,7 @@ pipeline {
                 }
             }
         }
-    } 
+    } // End of stages wrapper
 
     post {
         always {
@@ -127,11 +125,7 @@ pipeline {
         
         failure {
             script {
-                
-                // Main project page for Stage View
                 def projectDashboard = "${env.JOB_URL}"
-
-                // Specific report links for this specific failed build
                 def unitUrl = "${env.BUILD_URL}Unit_20Test_20Report/"
                 def intUrl = "${env.BUILD_URL}Integration_20Test_20Report/"
                 def e2eUrl = "${env.BUILD_URL}E2E_20Test_20Report/"
@@ -149,9 +143,7 @@ pipeline {
                         fields: [
                             project: [ key: 'DEV' ], 
                             summary: "Build Failure: DevOps-Exercise #${env.BUILD_NUMBER}", 
-                            description: "The pipeline stopped due to a failure.\n\n" +
-                                         "Check the Stage View Dashboard: ${projectDashboard}\n" +
-                                         "Direct Link to Build #${env.BUILD_NUMBER}: ${env.BUILD_URL}",
+                            description: "Check the Stage View Dashboard: ${projectDashboard}\nDirect Link: ${env.BUILD_URL}",
                             issuetype: [ name: 'Bug' ]
                         ]
                     ]
@@ -159,3 +151,4 @@ pipeline {
             }
         }
     } 
+} 
