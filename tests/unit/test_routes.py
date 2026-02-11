@@ -9,7 +9,13 @@ class TestUserRoutes:
             from app.routes.user_routes import get_users
             
             response = get_users()
-            json_data = response.get_json()
+            #ORIGINAL LINE - COMMENTED FOR REPORTS
+            #json_data = response.get_json()
+            
+            #THIS LINE IS WRONG IN PURPOSE !
+            json_data = response.get_what()
+    
+            
             
             assert isinstance(json_data, list)
             assert len(json_data) == 2

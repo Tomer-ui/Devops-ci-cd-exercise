@@ -2,8 +2,6 @@ pipeline {
     agent any
 
     options {
-        // This forces Jenkins to run subsequent stages even if one fails
-        skipStagesAfterSkippedStage(false) 
         buildDiscarder(logRotator(numToKeepStr: '10', artifactNumToKeepStr: '10'))
     } 
     
@@ -116,52 +114,43 @@ pipeline {
         }
 
         stage('Post Actions') {
-            // We use a 'when' block to ensure this stage is considered active even after failure
+            // This is the robust way to ensure a stage runs even if the build failed earlier
             when {
                 beforeAgent true
                 expression { return true } 
             }
-            post {
-                always {
-                    script {
-                        publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'unit_report.html', reportName: 'Unit Test Report'])
-                        publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'integration_report.html', reportName: 'Integration Test Report'])
-                        publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'e2e_report.html', reportName: 'E2E Test Report'])
-                        publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'performance_report.html', reportName: 'Performance Report'])
+            steps {
+                script {
+                    // Publish reports
+                    publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'unit_report.html', reportName: 'Unit Test Report'])
+                    publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'integration_report.html', reportName: 'Integration Test Report'])
+                    publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'e2e_report.html', reportName: 'E2E Test Report'])
+                    publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'performance_report.html', reportName: 'Performance Report'])
 
-                        if (currentBuild.result == 'SUCCESS' || currentBuild.result == null) {
-                            slackSend (
-                                color: '#00FF00', 
-                                message: "✅ SUCCESS: Build #${env.BUILD_NUMBER} (${env.BUILD_VERSION}) passed!"
-                            )
-                        } else {
-                            slackSend (
-                                color: '#FF0000', 
-                                message: "❌ FAILURE: Build #${env.BUILD_NUMBER} stopped.\n🔍 Reports: <${env.BUILD_URL}Unit_20Test_20Report/|Unit> | <${env.BUILD_URL}Integration_20Test_20Report/|Int>"
-                            )
-                            
-                            jiraNewIssue (
-                                site: 'JiraLocal', 
-                                issue: [
-                                    fields: [
-                                        project: [ key: 'DEV' ], 
-                                        summary: "Build Failure: DevOps-Exercise #${env.BUILD_NUMBER}", 
-                                        description: "Check: ${env.BUILD_URL}",
-                                        issuetype: [ name: 'Bug' ]
-                                    ]
+                    // Notification Logic
+                    if (currentBuild.result == 'SUCCESS' || currentBuild.result == null) {
+                        slackSend (color: '#00FF00', message: "✅ SUCCESS: Build #${env.BUILD_NUMBER} passed!")
+                    } else {
+                        slackSend (color: '#FF0000', message: "❌ FAILURE: Build #${env.BUILD_NUMBER} stopped. Check: ${env.BUILD_URL}")
+                        jiraNewIssue (
+                            site: 'JiraLocal', 
+                            issue: [
+                                fields: [
+                                    project: [ key: 'DEV' ], 
+                                    summary: "Build Failure: DevOps-Exercise #${env.BUILD_NUMBER}", 
+                                    description: "Failed at stage: ${env.STAGE_NAME}. Link: ${env.BUILD_URL}",
+                                    issuetype: [ name: 'Bug' ]
                                 ]
-                            )
-                        }
+                            ]
+                        )
                     }
                 }
-            }
-            steps {
-                echo "Finalizing pipeline and sending notifications..."
             }
         }
     } 
 
     post {
+        // Use the global post block for the absolute "last resort" cleanup
         cleanup {
             script {
                 try {
