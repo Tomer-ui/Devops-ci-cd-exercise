@@ -40,3 +40,17 @@
 
 ### Architecture of project
 ![Architecture for project](./images/ci_cd_jenkins.png)
+
+## project output
+
+### Failed Pipeline
+![Failed Pipeline Screenshot](./images/fail1.png)
+
+### JIRA Notification on Failure
+![JIRA Issue Screenshot](./images/fail_jira.png)
+
+### Successful Pipeline
+![Successful Pipeline Screenshot](./images/sucess.png)
+
+### Slack Notification
+![Slack Notification Screenshot](./images/slack.png)
