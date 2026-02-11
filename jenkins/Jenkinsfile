@@ -2,7 +2,8 @@ pipeline {
     agent any
 
     options {
-        // Keeps the volume lean by deleting old build history
+        // This forces Jenkins to run subsequent stages even if one fails
+        skipStagesAfterSkippedStage(false) 
         buildDiscarder(logRotator(numToKeepStr: '10', artifactNumToKeepStr: '10'))
     } 
     
@@ -15,11 +16,8 @@ pipeline {
         stage('Initialize') {
             steps {
                 script {
-                    // "Unlock" HTML reports CSS/JS for this session
                     System.setProperty("hudson.model.DirectoryBrowserSupport.CSP", "")
                     sh "mkdir -p ${REPORTS_DIR}"
-                    
-                    // Calculate Version
                     def newVersion = sh(script: "python3 scripts/semver.py", returnStdout: true).trim()
                     env.BUILD_VERSION = newVersion
                     currentBuild.displayName = "#${env.BUILD_NUMBER} (${newVersion})"
@@ -118,34 +116,28 @@ pipeline {
         }
 
         stage('Post Actions') {
-            // This is the trick: 'post' inside a 'stage' allows it to trigger 
-            // even if previous stages failed, creating that visible bubble.
+            // We use a 'when' block to ensure this stage is considered active even after failure
+            when {
+                beforeAgent true
+                expression { return true } 
+            }
             post {
                 always {
                     script {
-                        // Publish the HTML reports
                         publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'unit_report.html', reportName: 'Unit Test Report'])
                         publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'integration_report.html', reportName: 'Integration Test Report'])
                         publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'e2e_report.html', reportName: 'E2E Test Report'])
                         publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'performance_report.html', reportName: 'Performance Report'])
 
-                        // Determine notification logic
                         if (currentBuild.result == 'SUCCESS' || currentBuild.result == null) {
                             slackSend (
                                 color: '#00FF00', 
-                                message: "✅ SUCCESS: Build #${env.BUILD_NUMBER} (${env.BUILD_VERSION}) passed!\nArtifact pushed to DockerHub.\nRelease created on GitHub.\nSee: ${env.BUILD_URL}"
+                                message: "✅ SUCCESS: Build #${env.BUILD_NUMBER} (${env.BUILD_VERSION}) passed!"
                             )
                         } else {
-                            def projectDashboard = "${env.JOB_URL}"
-                            def unitUrl = "${env.BUILD_URL}Unit_20Test_20Report/"
-                            def intUrl = "${env.BUILD_URL}Integration_20Test_20Report/"
-                            def e2eUrl = "${env.BUILD_URL}E2E_20Test_20Report/"
-
                             slackSend (
                                 color: '#FF0000', 
-                                message: "❌ FAILURE: Build #${env.BUILD_NUMBER} stopped.\n" + 
-                                         "📊 Dashboard: ${projectDashboard}\n" +
-                                         "🔍 Reports: <${unitUrl}|Unit> | <${intUrl}|Integration> | <${e2eUrl}|E2E>"
+                                message: "❌ FAILURE: Build #${env.BUILD_NUMBER} stopped.\n🔍 Reports: <${env.BUILD_URL}Unit_20Test_20Report/|Unit> | <${env.BUILD_URL}Integration_20Test_20Report/|Int>"
                             )
                             
                             jiraNewIssue (
@@ -154,7 +146,7 @@ pipeline {
                                     fields: [
                                         project: [ key: 'DEV' ], 
                                         summary: "Build Failure: DevOps-Exercise #${env.BUILD_NUMBER}", 
-                                        description: "The pipeline stopped due to a failure.\n\nCheck the Stage View Dashboard: ${projectDashboard}\nDirect Link to Build #${env.BUILD_NUMBER}: ${env.BUILD_URL}",
+                                        description: "Check: ${env.BUILD_URL}",
                                         issuetype: [ name: 'Bug' ]
                                     ]
                                 ]
@@ -164,8 +156,7 @@ pipeline {
                 }
             }
             steps {
-                // We need at least one step for the stage to be valid
-                echo "Finalizing pipeline results..."
+                echo "Finalizing pipeline and sending notifications..."
             }
         }
     } 
