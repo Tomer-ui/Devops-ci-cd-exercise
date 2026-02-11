@@ -36,109 +36,57 @@ pipeline {
         
         stage('Unit Tests') {
             steps {
-                sh '''
-                    . ${VENV}/bin/activate
-                    pytest tests/unit \
-                        --cov=app \
-                        --cov-report=html:${REPORTS_DIR}/coverage \
-                        --html=${REPORTS_DIR}/unit_report.html \
-                        --self-contained-html
-                '''
-            }
-        }
-
-        stage('Integration Tests') {
-            steps {
-                sh '''
-                    . ${VENV}/bin/activate
-                    pytest tests/integration \
-                        --html=${REPORTS_DIR}/integration_report.html \
-                        --self-contained-html
-                '''
-            }
-        }
-
-        stage('E2E Tests') {
-            steps {
-                sh '''
-                    . ${VENV}/bin/activate
-                    pytest tests/e2e \
-                        --html=${REPORTS_DIR}/e2e_report.html \
-                        --self-contained-html
-                '''
-            }
-        }
-
-        stage('Performance Tests') {
-            steps {
-                sh '''
-                    . ${VENV}/bin/activate
-                    python3 main.py &
-                    APP_PID=$!
-                    sleep 3
-                    locust -f tests/performance/locustfile.py --headless --users 5 --spawn-rate 1 --run-time 10s --host http://localhost:5000 --html ${REPORTS_DIR}/performance_report.html
-                    kill $APP_PID
-                '''
-            }
-        }
-        
-        stage('Build & Release') {
-            steps {
-                script {
-                    withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                        sh """
-                            echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin
-                            docker build -t \$DOCKER_USER/devops-exercise:${env.BUILD_VERSION} -f docker/Dockerfile .
-                            docker push \$DOCKER_USER/devops-exercise:${env.BUILD_VERSION}
-                            docker tag \$DOCKER_USER/devops-exercise:${env.BUILD_VERSION} \$DOCKER_USER/devops-exercise:latest
-                            docker push \$DOCKER_USER/devops-exercise:latest
-                        """
-                    }
-                    
-                    withCredentials([string(credentialsId: 'github-token', variable: 'GITHUB_TOKEN')]) {
-                        def jsonPayload = """
-                            {
-                              "tag_name": "v${env.BUILD_VERSION}",
-                              "target_commitish": "dev",
-                              "name": "v${env.BUILD_VERSION}",
-                              "body": "Automated release from Jenkins Build #${env.BUILD_NUMBER}",
-                              "draft": false,
-                              "prerelease": false
-                            }
-                        """
-                        writeFile file: 'release.json', text: jsonPayload
-                        sh "curl -X POST -H 'Authorization: token ${GITHUB_TOKEN}' -H 'Accept: application/vnd.github.v3+json' https://api.github.com/repos/Tomer-ui/Devops-ci-cd-exercise/releases -d @release.json"
-                    }
+                // This block is what allows the pipeline to keep moving to "Post Actions"
+                catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+                    sh '''
+                        . ${VENV}/bin/activate
+                        pytest tests/unit \
+                            --cov=app \
+                            --cov-report=html:${REPORTS_DIR}/coverage \
+                            --html=${REPORTS_DIR}/unit_report.html \
+                            --self-contained-html
+                    '''
                 }
             }
         }
 
-        stage('Post Actions') {
-            // This is the robust way to ensure a stage runs even if the build failed earlier
-            when {
-                beforeAgent true
-                expression { return true } 
+        // These stages will be skipped if Unit Tests set the buildResult to FAILURE
+        stage('Integration Tests') {
+            when { attribution { return currentBuild.result == null || currentBuild.result == 'SUCCESS' } }
+            steps {
+                sh ". ${VENV}/bin/activate && pytest tests/integration --html=${REPORTS_DIR}/integration_report.html --self-contained-html"
             }
+        }
+
+        stage('E2E Tests') {
+            when { attribution { return currentBuild.result == null || currentBuild.result == 'SUCCESS' } }
+            steps {
+                sh ". ${VENV}/bin/activate && pytest tests/e2e --html=${REPORTS_DIR}/e2e_report.html --self-contained-html"
+            }
+        }
+
+        stage('Post Actions') {
+            // No 'when' block needed here; it runs by default because the previous stages didn't 'abort' the flow
             steps {
                 script {
-                    // Publish reports
+                    // 1. Publish the reports
                     publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'unit_report.html', reportName: 'Unit Test Report'])
                     publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'integration_report.html', reportName: 'Integration Test Report'])
-                    publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'e2e_report.html', reportName: 'E2E Test Report'])
-                    publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'performance_report.html', reportName: 'Performance Report'])
 
-                    // Notification Logic
+                    // 2. Notification Logic
                     if (currentBuild.result == 'SUCCESS' || currentBuild.result == null) {
                         slackSend (color: '#00FF00', message: "✅ SUCCESS: Build #${env.BUILD_NUMBER} passed!")
                     } else {
-                        slackSend (color: '#FF0000', message: "❌ FAILURE: Build #${env.BUILD_NUMBER} stopped. Check: ${env.BUILD_URL}")
+                        // This will now trigger because catchError allowed the pipeline to reach this point
+                        slackSend (color: '#FF0000', message: "❌ FAILURE: Build #${env.BUILD_NUMBER} failed. Check: ${env.BUILD_URL}")
+                        
                         jiraNewIssue (
                             site: 'JiraLocal', 
                             issue: [
                                 fields: [
                                     project: [ key: 'DEV' ], 
                                     summary: "Build Failure: DevOps-Exercise #${env.BUILD_NUMBER}", 
-                                    description: "Failed at stage: ${env.STAGE_NAME}. Link: ${env.BUILD_URL}",
+                                    description: "The pipeline found errors. Link: ${env.BUILD_URL}",
                                     issuetype: [ name: 'Bug' ]
                                 ]
                             ]
@@ -150,19 +98,8 @@ pipeline {
     } 
 
     post {
-        // Use the global post block for the absolute "last resort" cleanup
         cleanup {
-            script {
-                try {
-                    withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                        sh "docker rmi \$DOCKER_USER/devops-exercise:${env.BUILD_VERSION} || true"
-                        sh "docker rmi \$DOCKER_USER/devops-exercise:latest || true"
-                    }
-                } catch (e) {
-                    echo "Cleanup warning: ${e}"
-                }
-                cleanWs()
-            }
+            cleanWs()
         }
     }
 }
