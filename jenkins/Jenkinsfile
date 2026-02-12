@@ -16,39 +16,79 @@ pipeline {
                 script {
                     System.setProperty("hudson.model.DirectoryBrowserSupport.CSP", "")
                     sh "mkdir -p ${REPORTS_DIR}"
-                    
-                    // Generate new version using semver.py
                     def newVersion = sh(script: "python3 scripts/semver.py", returnStdout: true).trim()
-                    if (!newVersion) { error "Versioning script returned empty!" }
-                    
                     env.BUILD_VERSION = newVersion
                     currentBuild.displayName = "#${env.BUILD_NUMBER} (${newVersion})"
                 }
             }
         }
         
-        stage('Setup & Test') {
+        stage('Setup Dependencies') {
             steps {
                 sh '''
                     python3 -m venv ${VENV}
                     . ${VENV}/bin/activate
                     pip install --upgrade pip
                     pip install -r requirements.txt
-                    
-                    # Run tests and generate reports
-                    pytest tests/unit --html=${REPORTS_DIR}/unit_report.html --self-contained-html || true
-                    pytest tests/integration --html=${REPORTS_DIR}/integration_report.html --self-contained-html || true
                 '''
             }
         }
-
-        stage('Build & Release') {
-            when { 
-                expression { return currentBuild.result == null || currentBuild.result == 'SUCCESS' } 
+        
+        stage('Unit Tests') {
+            steps {
+                // catchError marks the build as FAILED but keeps the pipeline alive to reach Post Actions
+                catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+                    sh '''
+                        . ${VENV}/bin/activate
+                        pytest tests/unit \
+                            --cov=app \
+                            --cov-report=html:${REPORTS_DIR}/coverage \
+                            --html=${REPORTS_DIR}/unit_report.html \
+                            --self-contained-html
+                    '''
+                }
             }
+        }
+
+        stage('Integration Tests') {
+            // "when" block ensures this only runs if previous stage didn't set result to FAILURE
+            when { expression { return currentBuild.result == null || currentBuild.result == 'SUCCESS' } }
+            steps {
+                catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+                    sh ". ${VENV}/bin/activate && pytest tests/integration --html=${REPORTS_DIR}/integration_report.html --self-contained-html"
+                }
+            }
+        }
+
+        stage('E2E Tests') {
+            when { expression { return currentBuild.result == null || currentBuild.result == 'SUCCESS' } }
+            steps {
+                catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+                    sh ". ${VENV}/bin/activate && pytest tests/e2e --html=${REPORTS_DIR}/e2e_report.html --self-contained-html"
+                }
+            }
+        }
+
+        stage('Performance Tests') {
+            when { expression { return currentBuild.result == null || currentBuild.result == 'SUCCESS' } }
+            steps {
+                catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+                    sh '''
+                        . ${VENV}/bin/activate
+                        python3 main.py &
+                        APP_PID=$!
+                        sleep 3
+                        locust -f tests/performance/locustfile.py --headless --users 5 --spawn-rate 1 --run-time 10s --host http://localhost:5000 --html ${REPORTS_DIR}/performance_report.html
+                        kill $APP_PID
+                    '''
+                }
+            }
+        }
+        
+        stage('Build & Release') {
+            when { expression { return currentBuild.result == null || currentBuild.result == 'SUCCESS' } }
             steps {
                 script {
-                    // 1. Docker Publish
                     withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
                         sh '''
                             echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
@@ -58,19 +98,17 @@ pipeline {
                             docker push "$DOCKER_USER/devops-exercise:latest"
                         '''
                     }
-
-                    // 2. Git Tagging & GitHub Release
+                    
                     withCredentials([string(credentialsId: 'github-token', variable: 'GITHUB_TOKEN')]) {
                         sh '''
                             git config user.email "jenkins@tomas-pc"
                             git config user.name "Jenkins CI"
                             git remote set-url origin "https://${GITHUB_TOKEN}@github.com/Tomer-ui/Devops-ci-cd-exercise.git"
                             
-                            # CRITICAL: Clean local state to prevent 'tag already exists' errors
+                            # NEW LOGIC: Delete from Remote first, then local, then push fresh
+                            git push --delete origin "v${BUILD_VERSION}" || true
                             git tag -d "v${BUILD_VERSION}" || true
-                            git fetch --tags --force
                             
-                            # Create and push new tag
                             git tag -a "v${BUILD_VERSION}" -m "Release v${BUILD_VERSION}"
                             git push origin "v${BUILD_VERSION}"
                         '''
@@ -86,12 +124,8 @@ pipeline {
                             }
                         """
                         writeFile file: 'release.json', text: jsonPayload
-                        
                         sh '''
-                            curl -X POST -H "Authorization: token ${GITHUB_TOKEN}" \
-                                 -H "Accept: application/vnd.github.v3+json" \
-                                 https://api.github.com/repos/Tomer-ui/Devops-ci-cd-exercise/releases \
-                                 -d @release.json
+                            curl -X POST -H "Authorization: token ${GITHUB_TOKEN}" -H "Accept: application/vnd.github.v3+json" https://api.github.com/repos/Tomer-ui/Devops-ci-cd-exercise/releases -d @release.json
                         '''
                     }
                 }
@@ -103,20 +137,43 @@ pipeline {
                 script {
                     publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'unit_report.html', reportName: 'Unit Test Report'])
                     publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'integration_report.html', reportName: 'Integration Test Report'])
+                    publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'e2e_report.html', reportName: 'E2E Test Report'])
+                    publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'performance_report.html', reportName: 'Performance Report'])
 
                     if (currentBuild.result == 'SUCCESS' || currentBuild.result == null) {
-                        slackSend(color: '#00FF00', message: "✅ Build #${env.BUILD_NUMBER} SUCCESS. Version: ${env.BUILD_VERSION}")
+                        slackSend (color: '#00FF00', message: "✅ SUCCESS: Build #${env.BUILD_NUMBER} (${env.BUILD_VERSION}) passed!")
                     } else {
-                        slackSend(color: '#FF0000', message: "❌ Build #${env.BUILD_NUMBER} FAILED.")
+                        slackSend (color: '#FF0000', message: "❌ FAILURE: Build #${env.BUILD_NUMBER} stopped.\n📊 Dashboard: ${env.JOB_URL}")
+                        jiraNewIssue (
+                            site: 'JiraLocal', 
+                            issue: [
+                                fields: [
+                                    project: [ key: 'DEV' ], 
+                                    summary: "Build Failure: DevOps-Exercise #${env.BUILD_NUMBER}", 
+                                    description: "Pipeline stopped. Check build details: ${env.BUILD_URL}",
+                                    issuetype: [ name: 'Bug' ]
+                                ]
+                            ]
+                        )
                     }
                 }
             }
         }
-    }
+    } 
 
     post {
-        always {
-            cleanWs()
+        cleanup {
+            script {
+                try {
+                    withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                        sh "docker rmi ${DOCKER_USER}/devops-exercise:${env.BUILD_VERSION} || true"
+                        sh "docker rmi ${DOCKER_USER}/devops-exercise:latest || true"
+                    }
+                } catch (e) {
+                    echo "Cleanup warning: ${e}"
+                }
+                cleanWs()
+            }
         }
     }
 }
