@@ -14,9 +14,14 @@ pipeline {
         stage('Initialize') {
             steps {
                 script {
+                    // Fix: Ensure CSP is relaxed for HTML reports and capture version
                     System.setProperty("hudson.model.DirectoryBrowserSupport.CSP", "")
                     sh "mkdir -p ${REPORTS_DIR}"
+                    
                     def newVersion = sh(script: "python3 scripts/semver.py", returnStdout: true).trim()
+                    if (!newVersion) {
+                        error "Failed to retrieve version from scripts/semver.py"
+                    }
                     env.BUILD_VERSION = newVersion
                     currentBuild.displayName = "#${env.BUILD_NUMBER} (${newVersion})"
                 }
@@ -36,7 +41,6 @@ pipeline {
         
         stage('Unit Tests') {
             steps {
-                // catchError marks the build as FAILED but keeps the pipeline alive
                 catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
                     sh '''
                         . ${VENV}/bin/activate
@@ -100,14 +104,15 @@ pipeline {
             }
             steps {
                 script {
+                    // Fix: Using single quotes for sh to prevent Groovy from eating the $ variables
                     withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                        sh """
-                            echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin
-                            docker build -t \$DOCKER_USER/devops-exercise:${env.BUILD_VERSION} -f docker/Dockerfile .
-                            docker push \$DOCKER_USER/devops-exercise:${env.BUILD_VERSION}
-                            docker tag \$DOCKER_USER/devops-exercise:${env.BUILD_VERSION} \$DOCKER_USER/devops-exercise:latest
-                            docker push \$DOCKER_USER/devops-exercise:latest
-                        """
+                        sh '''
+                            echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+                            docker build -t "$DOCKER_USER/devops-exercise:${BUILD_VERSION}" -f docker/Dockerfile .
+                            docker push "$DOCKER_USER/devops-exercise:${BUILD_VERSION}"
+                            docker tag "$DOCKER_USER/devops-exercise:${BUILD_VERSION}" "$DOCKER_USER/devops-exercise:latest"
+                            docker push "$DOCKER_USER/devops-exercise:latest"
+                        '''
                     }
                     
                     withCredentials([string(credentialsId: 'github-token', variable: 'GITHUB_TOKEN')]) {
@@ -129,26 +134,22 @@ pipeline {
         }
 
         stage('Post Actions') {
-            // No 'when' block here ensures it runs even if tests failed
             steps {
                 script {
-                    // Publish the HTML reports
                     publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'unit_report.html', reportName: 'Unit Test Report'])
                     publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'integration_report.html', reportName: 'Integration Test Report'])
                     publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'e2e_report.html', reportName: 'E2E Test Report'])
                     publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'performance_report.html', reportName: 'Performance Report'])
 
-                    // Conditional Notifications
                     if (currentBuild.result == 'SUCCESS' || currentBuild.result == null) {
                         slackSend (
                             color: '#00FF00', 
                             message: "✅ SUCCESS: Build #${env.BUILD_NUMBER} (${env.BUILD_VERSION}) passed!"
                         )
                     } else {
-                        def projectDashboard = "${env.JOB_URL}"
                         slackSend (
                             color: '#FF0000', 
-                            message: "❌ FAILURE: Build #${env.BUILD_NUMBER} stopped.\n📊 Dashboard: ${projectDashboard}"
+                            message: "❌ FAILURE: Build #${env.BUILD_NUMBER} stopped.\n📊 Dashboard: ${env.JOB_URL}"
                         )
                         
                         jiraNewIssue (
@@ -172,9 +173,10 @@ pipeline {
         cleanup {
             script {
                 try {
+                    // Cleanup local images to save disk space
                     withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                        sh "docker rmi \$DOCKER_USER/devops-exercise:${env.BUILD_VERSION} || true"
-                        sh "docker rmi \$DOCKER_USER/devops-exercise:latest || true"
+                        sh "docker rmi ${DOCKER_USER}/devops-exercise:${env.BUILD_VERSION} || true"
+                        sh "docker rmi ${DOCKER_USER}/devops-exercise:latest || true"
                     }
                 } catch (e) {
                     echo "Cleanup warning: ${e}"
