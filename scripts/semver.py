@@ -1,49 +1,30 @@
-import os
-import re
 import subprocess
 import sys
 
-def get_last_tag():
+def get_latest_tag():
     try:
-        # Get the latest tag (e.g., v1.0.1)
-        cmd = "git describe --tags --abbrev=0"
-        tag = subprocess.check_output(cmd.split()).decode().strip()
-        return tag.replace('v', '')
-    except:
-        return "0.0.0"
+        # Fetch tags to ensure we have the latest from origin
+        subprocess.run(["git", "fetch", "--tags"], check=True, capture_output=True)
+        # Get the latest tag name
+        tag = subprocess.check_output(["git", "describe", "--tags", "--abbrev=0"], stderr=subprocess.STDOUT).decode('utf-8').strip()
+        return tag
+    except subprocess.CalledProcessError:
+        return "v1.0.0"
 
-def get_commit_message():
-    # Get the last commit message
-    cmd = "git log -1 --pretty=%B"
-    return subprocess.check_output(cmd.split()).decode().strip()
-
-def bump_version(current_ver, message):
-    major, minor, patch = map(int, current_ver.split('.'))
+def increment_version(version_str):
+    # Remove 'v' prefix if present
+    version_str = version_str.lstrip('v')
+    parts = version_str.split('.')
     
-    # Logic based on commit message keywords
-    if "BREAKING" in message:
-        major += 1
-        minor = 0
-        patch = 0
-    elif "feat" in message.lower():
-        minor += 1
-        patch = 0
-    elif "fix" in message.lower() or "bug" in message.lower():
-        patch += 1
-    else:
-        # Default behavior for other commits
-        patch += 1
-        
-    return f"{major}.{minor}.{patch}"
+    if len(parts) != 3:
+        return "1.0.0"
+    
+    major, minor, patch = parts
+    # Increment the patch version
+    new_patch = int(patch) + 1
+    return f"{major}.{minor}.{new_patch}"
 
 if __name__ == "__main__":
-    last_ver = get_last_tag()
-    msg = get_commit_message()
-    
-    # If starting fresh
-    if last_ver == "0.0.0":
-        new_ver = "1.0.0"
-    else:
-        new_ver = bump_version(last_ver, msg)
-        
-    print(new_ver)
+    latest = get_latest_tag()
+    new_version = increment_version(latest)
+    print(new_version)

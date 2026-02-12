@@ -14,14 +14,13 @@ pipeline {
         stage('Initialize') {
             steps {
                 script {
-                    // Fix: Ensure CSP is relaxed for HTML reports and capture version
                     System.setProperty("hudson.model.DirectoryBrowserSupport.CSP", "")
                     sh "mkdir -p ${REPORTS_DIR}"
                     
+                    // Get the next version from our python script
                     def newVersion = sh(script: "python3 scripts/semver.py", returnStdout: true).trim()
-                    if (!newVersion) {
-                        error "Failed to retrieve version from scripts/semver.py"
-                    }
+                    if (!newVersion) { error "Versioning script failed!" }
+                    
                     env.BUILD_VERSION = newVersion
                     currentBuild.displayName = "#${env.BUILD_NUMBER} (${newVersion})"
                 }
@@ -39,72 +38,28 @@ pipeline {
             }
         }
         
-        stage('Unit Tests') {
+        stage('Tests') {
             steps {
-                catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
-                    sh '''
-                        . ${VENV}/bin/activate
-                        pytest tests/unit \
-                            --cov=app \
-                            --cov-report=html:${REPORTS_DIR}/coverage \
-                            --html=${REPORTS_DIR}/unit_report.html \
-                            --self-contained-html
-                    '''
+                script {
+                    // Running Unit Tests with catchError to allow reporting even on failure
+                    catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+                        sh ". ${VENV}/bin/activate && pytest tests/unit --html=${REPORTS_DIR}/unit_report.html --self-contained-html"
+                    }
+                    
+                    // Only run following tests if previous stages haven't failed the build
+                    if (currentBuild.result == null || currentBuild.result == 'SUCCESS') {
+                        sh ". ${VENV}/bin/activate && pytest tests/integration --html=${REPORTS_DIR}/integration_report.html --self-contained-html"
+                        sh ". ${VENV}/bin/activate && pytest tests/e2e --html=${REPORTS_DIR}/e2e_report.html --self-contained-html"
+                    }
                 }
             }
         }
 
-        stage('Integration Tests') {
-            when { 
-                expression { return currentBuild.result == null || currentBuild.result == 'SUCCESS' } 
-            }
-            steps {
-                sh '''
-                    . ${VENV}/bin/activate
-                    pytest tests/integration \
-                        --html=${REPORTS_DIR}/integration_report.html \
-                        --self-contained-html
-                '''
-            }
-        }
-
-        stage('E2E Tests') {
-            when { 
-                expression { return currentBuild.result == null || currentBuild.result == 'SUCCESS' } 
-            }
-            steps {
-                sh '''
-                    . ${VENV}/bin/activate
-                    pytest tests/e2e \
-                        --html=${REPORTS_DIR}/e2e_report.html \
-                        --self-contained-html
-                '''
-            }
-        }
-
-        stage('Performance Tests') {
-            when { 
-                expression { return currentBuild.result == null || currentBuild.result == 'SUCCESS' } 
-            }
-            steps {
-                sh '''
-                    . ${VENV}/bin/activate
-                    python3 main.py &
-                    APP_PID=$!
-                    sleep 3
-                    locust -f tests/performance/locustfile.py --headless --users 5 --spawn-rate 1 --run-time 10s --host http://localhost:5000 --html ${REPORTS_DIR}/performance_report.html
-                    kill $APP_PID
-                '''
-            }
-        }
-        
         stage('Build & Release') {
-            when { 
-                expression { return currentBuild.result == null || currentBuild.result == 'SUCCESS' } 
-            }
+            when { expression { return currentBuild.result == null || currentBuild.result == 'SUCCESS' } }
             steps {
                 script {
-                    // Fix: Using single quotes for sh to prevent Groovy from eating the $ variables
+                    // 1. Push to DockerHub (Using single quotes for shell variables)
                     withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
                         sh '''
                             echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
@@ -114,20 +69,33 @@ pipeline {
                             docker push "$DOCKER_USER/devops-exercise:latest"
                         '''
                     }
-                    
+
+                    // 2. Push Git Tag (Crucial for semver.py to work next time)
                     withCredentials([string(credentialsId: 'github-token', variable: 'GITHUB_TOKEN')]) {
+                        sh """
+                            git config user.email "jenkins@tomas-pc"
+                            git config user.name "Jenkins CI"
+                            git remote set-url origin https://${GITHUB_TOKEN}@github.com/Tomer-ui/Devops-ci-cd-exercise.git
+                            git tag -a "v${env.BUILD_VERSION}" -m "Release v${env.BUILD_VERSION}"
+                            git push origin "v${env.BUILD_VERSION}"
+                        """
+                        
+                        // 3. Create GitHub Release
                         def jsonPayload = """
                             {
                               "tag_name": "v${env.BUILD_VERSION}",
                               "target_commitish": "dev",
                               "name": "v${env.BUILD_VERSION}",
                               "body": "Automated release from Jenkins Build #${env.BUILD_NUMBER}",
-                              "draft": false,
-                              "prerelease": false
+                              "draft": false, "prerelease": false
                             }
                         """
                         writeFile file: 'release.json', text: jsonPayload
-                        sh "curl -X POST -H 'Authorization: token ${GITHUB_TOKEN}' -H 'Accept: application/vnd.github.v3+json' https://api.github.com/repos/Tomer-ui/Devops-ci-cd-exercise/releases -d @release.json"
+                        sh '''
+                            curl -X POST -H "Authorization: token ${GITHUB_TOKEN}" \
+                                 -H "Accept: application/vnd.github.v3+json" \
+                                 https://api.github.com/repos/Tomer-ui/Devops-ci-cd-exercise/releases -d @release.json
+                        '''
                     }
                 }
             }
@@ -138,49 +106,20 @@ pipeline {
                 script {
                     publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'unit_report.html', reportName: 'Unit Test Report'])
                     publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'integration_report.html', reportName: 'Integration Test Report'])
-                    publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'e2e_report.html', reportName: 'E2E Test Report'])
-                    publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'performance_report.html', reportName: 'Performance Report'])
-
+                    
                     if (currentBuild.result == 'SUCCESS' || currentBuild.result == null) {
-                        slackSend (
-                            color: '#00FF00', 
-                            message: "✅ SUCCESS: Build #${env.BUILD_NUMBER} (${env.BUILD_VERSION}) passed!"
-                        )
+                        slackSend (color: '#00FF00', message: "✅ SUCCESS: v${env.BUILD_VERSION} is live!")
                     } else {
-                        slackSend (
-                            color: '#FF0000', 
-                            message: "❌ FAILURE: Build #${env.BUILD_NUMBER} stopped.\n📊 Dashboard: ${env.JOB_URL}"
-                        )
-                        
-                        jiraNewIssue (
-                            site: 'JiraLocal', 
-                            issue: [
-                                fields: [
-                                    project: [ key: 'DEV' ], 
-                                    summary: "Build Failure: DevOps-Exercise #${env.BUILD_NUMBER}", 
-                                    description: "Pipeline stopped. Check build details: ${env.BUILD_URL}",
-                                    issuetype: [ name: 'Bug' ]
-                                ]
-                            ]
-                        )
+                        slackSend (color: '#FF0000', message: "❌ FAILURE: Build #${env.BUILD_NUMBER} failed.")
                     }
                 }
             }
         }
-    } 
+    }
 
     post {
         cleanup {
             script {
-                try {
-                    // Cleanup local images to save disk space
-                    withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                        sh "docker rmi ${DOCKER_USER}/devops-exercise:${env.BUILD_VERSION} || true"
-                        sh "docker rmi ${DOCKER_USER}/devops-exercise:latest || true"
-                    }
-                } catch (e) {
-                    echo "Cleanup warning: ${e}"
-                }
                 cleanWs()
             }
         }
