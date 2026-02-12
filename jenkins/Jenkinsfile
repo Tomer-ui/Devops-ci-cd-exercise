@@ -36,13 +36,12 @@ pipeline {
         
         stage('Unit Tests') {
             steps {
-                // catchError marks the build as FAILED but keeps the pipeline alive to reach Post Actions
                 catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
                     sh '''
                         . ${VENV}/bin/activate
                         pytest tests/unit \
                             --cov=app \
-                            --cov-report=html:${REPORTS_DIR}/coverage \
+                            --cov-report=html:htmlcov \
                             --html=${REPORTS_DIR}/unit_report.html \
                             --self-contained-html
                     '''
@@ -51,7 +50,6 @@ pipeline {
         }
 
         stage('Integration Tests') {
-            // "when" block ensures this only runs if previous stage didn't set result to FAILURE
             when { expression { return currentBuild.result == null || currentBuild.result == 'SUCCESS' } }
             steps {
                 catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
@@ -104,11 +102,8 @@ pipeline {
                             git config user.email "jenkins@tomas-pc"
                             git config user.name "Jenkins CI"
                             git remote set-url origin "https://${GITHUB_TOKEN}@github.com/Tomer-ui/Devops-ci-cd-exercise.git"
-                            
-                            # NEW LOGIC: Delete from Remote first, then local, then push fresh
                             git push --delete origin "v${BUILD_VERSION}" || true
                             git tag -d "v${BUILD_VERSION}" || true
-                            
                             git tag -a "v${BUILD_VERSION}" -m "Release v${BUILD_VERSION}"
                             git push origin "v${BUILD_VERSION}"
                         '''
@@ -135,10 +130,14 @@ pipeline {
         stage('Post Actions') {
             steps {
                 script {
+                    // Archive and publish all reports
                     publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'unit_report.html', reportName: 'Unit Test Report'])
                     publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'integration_report.html', reportName: 'Integration Test Report'])
                     publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'e2e_report.html', reportName: 'E2E Test Report'])
                     publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'performance_report.html', reportName: 'Performance Report'])
+                    
+                    //  Coverage Report button
+                    publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'htmlcov', reportFiles: 'index.html', reportName: 'Code Coverage Report'])
 
                     if (currentBuild.result == 'SUCCESS' || currentBuild.result == null) {
                         slackSend (color: '#00FF00', message: "✅ SUCCESS: Build #${env.BUILD_NUMBER} (${env.BUILD_VERSION}) passed!")
@@ -172,6 +171,7 @@ pipeline {
                 } catch (e) {
                     echo "Cleanup warning: ${e}"
                 }
+                
                 cleanWs()
             }
         }
