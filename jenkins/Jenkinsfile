@@ -150,7 +150,7 @@ pipeline {
                                 fields: [
                                     project: [ key: 'DEV' ], 
                                     summary: "Build Failure: DevOps-Exercise #${env.BUILD_NUMBER}", 
-                                    description: "Pipeline stopped. Check build details: ${env.BUILD_URL}",
+                                    description: "Pipeline stopped. Check build details: ${env.JOB_URL}",
                                     issuetype: [ name: 'Bug' ]
                                 ]
                             ]
