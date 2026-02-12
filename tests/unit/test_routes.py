@@ -10,10 +10,10 @@ class TestUserRoutes:
             
             response = get_users()
             ###ORIGINAL LINE - COMMENTED FOR REPORTS
-            json_data = response.get_json()
+            #json_data = response.get_json()
 
             #THIS LINE IS WRONG IN PURPOSE !
-            #json_data = response.get_purpose_error()
+            json_data = response.get_purpose_error()
     
             
             
