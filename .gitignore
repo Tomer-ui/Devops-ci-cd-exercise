@@ -45,3 +45,5 @@ htmlcov/
 temp/
 tmp/
 images_slides/
+instructions.txt
+progress_logs/

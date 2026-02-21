@@ -1,0 +1,92 @@
+---
+- name: Setup DevOps Staging Environment
+  hosts: all
+  become: yes
+  vars:
+    app_dir: /opt/devops-app
+    venv_path: "{{ app_dir }}/venv"
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install basic dependencies
+      apt:
+        name:
+          - python3
+          - python3-pip
+          - python3-venv
+          - git
+          - curl
+          - software-properties-common
+        state: present
+
+    - name: Add Mozilla Team PPA for Firefox ESR
+      apt_repository:
+        repo: ppa:mozillateam/ppa
+        state: present
+
+    - name: Install Firefox ESR and Geckodriver
+      apt:
+        name:
+          - firefox-esr
+          - geckodriver
+        state: present
+
+    - name: Create application directory
+      file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: '0755'
+
+    - name: Copy application code
+      copy:
+        src: ../
+        dest: "{{ app_dir }}/"
+        owner: ubuntu
+        group: ubuntu
+        mode: '0644'
+      # Skip some files if possible, but copy is simple. 
+      # Note: this will copy the whole repo, including .git and terraform/
+      # In a real scenario, we'd use git or be more selective.
+
+    - name: Create virtual environment
+      command: "python3 -m venv {{ venv_path }}"
+      args:
+        creates: "{{ venv_path }}"
+
+    - name: Install requirements in venv
+      pip:
+        requirements: "{{ app_dir }}/requirements.txt"
+        virtualenv: "{{ venv_path }}"
+
+    - name: Create systemd service file for Flask app
+      copy:
+        dest: /etc/systemd/system/flask-app.service
+        content: |
+          [Unit]
+          Description=Gunicorn instance to serve Flask App
+          After=network.target
+
+          [Service]
+          User=ubuntu
+          Group=ubuntu
+          WorkingDirectory={{ app_dir }}
+          Environment="PATH={{ venv_path }}/bin"
+          ExecStart={{ venv_path }}/bin/gunicorn --workers 3 --bind 0.0.0.0:5000 main:create_app()
+
+          [Install]
+          WantedBy=multi-user.target
+      register: systemd_service
+
+    - name: Reload systemd and start Flask app
+      systemd:
+        name: flask-app
+        state: restarted
+        daemon_reload: yes
+        enabled: yes
+      when: systemd_service.changed or true # always restart for now to ensure new code is picked up

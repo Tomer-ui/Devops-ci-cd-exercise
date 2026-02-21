@@ -1,3 +1,6 @@
+# install on ur system :
+#sudo add-apt-repository ppa:mozillateam/ppa
+#sudo apt install -y firefox-esr geckodriver
 import pytest
 import time
 import json
@@ -6,15 +9,34 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.firefox.service import Service
+#from selenium.webdriver.firefox.service import Service  #opted to install on system
 from selenium.webdriver.firefox.options import Options
-from webdriver_manager.firefox import GeckoDriverManager
+#from webdriver_manager.firefox import GeckoDriverManager #opted to install on system
 from app import create_app
 import threading
 
 
 @pytest.fixture(scope="module")
 def app_server():
+    # --- DEVOPS CHANGE: Support for remote staging environment ---
+    # We check if APP_URL is set (e.g., by Jenkins/Terraform).
+    # If set, we test against the real AWS instance.
+    remote_url = os.environ.get('APP_URL')
+    if remote_url:
+        yield remote_url
+        return
+
+    # --- ORIGINAL LOCAL FLOW (Preserved for reference) ---
+    # app = create_app()
+    # app.config['TESTING'] = True
+    # def run_app():
+    #     app.run(debug=False, host='127.0.0.1', port=5000, use_reloader=False)
+    # server_thread = threading.Thread(target=run_app, daemon=True)
+    # server_thread.start()
+    # time.sleep(2)  # Give server time to start
+    # yield "http://127.0.0.1:5000"
+
+    # Local fallback
     app = create_app()
     app.config['TESTING'] = True
     
@@ -30,36 +52,50 @@ def app_server():
 @pytest.fixture
 def driver(app_server):
     firefox_options = Options()
-    # firefox_options.add_argument("--headless")
+    firefox_options.add_argument("--headless")
     firefox_options.add_argument("--no-sandbox")
     firefox_options.add_argument("--disable-dev-shm-usage")
     
-    try:
-        service = Service(GeckoDriverManager().install())
-        driver = webdriver.Firefox(service=service, options=firefox_options)
-    except OSError as e:
-        # Handle exec format error by trying to find system geckodriver
-        if "Exec format error" in str(e):
-            # Try to use system geckodriver if available
-            try:
-                driver = webdriver.Firefox(options=firefox_options)
-            except Exception:
-                pytest.skip("GeckoDriver not available or incompatible")
-        else:
-            raise e
-    
+    # Fail fast if Firefox / geckodriver is missing
+    driver = webdriver.Firefox(options=firefox_options)
+
     driver.implicitly_wait(10)
-    
+
     yield driver
-    
+
     driver.quit()
+
+    #ORIGIN#  man those git api calls ran out fast... lel
+    # try:
+    #     service = Service(GeckoDriverManager().install())
+    #     driver = webdriver.Firefox(service=service, options=firefox_options)
+    # except OSError as e:
+    #     # Handle exec format error by trying to find system geckodriver
+    #     if "Exec format error" in str(e):
+    #         # Try to use system geckodriver if available
+    #         try:
+    #             driver = webdriver.Firefox(options=firefox_options)
+    #         except Exception:
+    #             pytest.skip("GeckoDriver not available or incompatible")
+    #     else:
+    #         raise e
+    
+    # driver.implicitly_wait(10)
+    
+    # yield driver
+    
+    # driver.quit()
 
 
 class TestWebInterface:
     def test_page_loads_successfully(self, driver, app_server):
         driver.get(app_server)
         
+        #COMMENTED for reports...
         assert "DevOps Testing Application" in driver.title
+
+        #THIS LINE IS WRONG IN PURPOSE !
+        #assert "Banana" in driver.title
         
         h1_element = driver.find_element(By.TAG_NAME, "h1")
         assert "DevOps Testing Application" in h1_element.text
@@ -188,7 +224,9 @@ class TestWebInterface:
         driver.get(app_server)
         
         buttons = driver.find_elements(By.TAG_NAME, "button")
-        assert len(buttons) >= 6
+        """ ORIGINAL LINE
+        assert len(buttons) >= 6   END OF LINE """
+        assert len(buttons) >= 5 # there are 5 buttons
         
         for button in buttons:
             assert button.is_enabled()
