@@ -13,7 +13,13 @@ variable "instance_type" {
 variable "instance_name" {
   description = "Name for the instance"
   type        = string
-  default     = "devops-staging"
+  default     = "devops-exercise"
+}
+
+variable "environment" {
+  description = "Target environment (staging or prod)"
+  type        = string
+  default     = "staging"
 }
 
 variable "ami_id" {

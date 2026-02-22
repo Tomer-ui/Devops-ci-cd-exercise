@@ -1,7 +1,7 @@
 # Security Group: "The Guard"
 resource "aws_security_group" "app_sg" {
-  name        = "${var.instance_name}-sg"
-  description = "Allow SSH and Flask traffic"
+  name        = "${var.instance_name}-${var.environment}-sg"
+  description = "Allow SSH and Flask traffic for ${var.environment}"
 
   # SSH for Jenkins/Ansible
   ingress {
@@ -36,6 +36,7 @@ resource "aws_instance" "app_server" {
   key_name               = "jenkins-key" # This MUST exist in your AWS account
 
   tags = {
-    Name = var.instance_name
+    Name        = "${var.instance_name}-${var.environment}"
+    Environment = var.environment
   }
 }

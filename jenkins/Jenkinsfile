@@ -4,14 +4,22 @@ pipeline {
     options {
         buildDiscarder(logRotator(numToKeepStr: '10', artifactNumToKeepStr: '10'))
     } 
+
+    triggers {
+        githubPush()
+    }
     
     environment {
         VENV = "${WORKSPACE}/venv"
         REPORTS_DIR = "${WORKSPACE}/reports"
+        // Variables to track state for cleanup/logs
+        CURRENT_IP = ""
+        ENVIRONMENT = ""
     }
     
     stages {
         stage('Initialize') {
+            when { branch 'main' }
             steps {
                 script {
                     System.setProperty("hudson.model.DirectoryBrowserSupport.CSP", "")
@@ -34,102 +42,90 @@ pipeline {
             }
         }
         
-        stage('Unit Tests') {
-            steps {
-                catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
-                    sh '''
-                        . ${VENV}/bin/activate
-                        pytest tests/unit \
-                            --cov=app \
-                            --cov-report=html:htmlcov \
-                            --html=${REPORTS_DIR}/unit_report.html \
-                            --self-contained-html
-                    '''
-                }
-            }
-        }
-
-        stage('Integration Tests') {
-            when { expression { return currentBuild.result == null || currentBuild.result == 'SUCCESS' } }
-            steps {
-                catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
-                    sh ". ${VENV}/bin/activate && pytest tests/integration --html=${REPORTS_DIR}/integration_report.html --self-contained-html"
-                }
-            }
-        }
-
-        stage('Infrastructure (Terraform)') {
-            when { expression { return currentBuild.result == null || currentBuild.result == 'SUCCESS' } }
+        // ==========================================
+        // STAGING PHASE
+        // ==========================================
+        
+        stage('Staging: Provision') {
             steps {
                 script {
-                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']]) {
-                        dir('terraform') {
-                            sh 'terraform init'
-                            sh 'terraform apply -auto-approve'
-                            env.STAGING_IP = sh(script: "terraform output -raw instance_public_ip", returnStdout: true).trim()
-                        }
-                    }
+                    env.ENVIRONMENT = "staging"
+                    provisionInfra("staging")
                 }
             }
         }
 
-        stage('Configuration (Ansible)') {
-            when { expression { return currentBuild.result == null || currentBuild.result == 'SUCCESS' } }
+        stage('Staging: Configure') {
+            steps {
+                script { runAnsible(env.CURRENT_IP) }
+            }
+        }
+
+        stage('Staging: Testing') {
             steps {
                 script {
-                    withCredentials([sshUserPrivateKey(credentialsId: 'jenkins-ssh-key', keyFileVariable: 'SSH_KEY_PATH')]) {
-                        dir('ansible') {
-                            // Create temporary inventory
-                            sh "echo '[app]\n${env.STAGING_IP} ansible_user=ubuntu ansible_ssh_private_key_file=${SSH_KEY_PATH}' > inventory"
-                            
-                            // Wait for SSH
-                            sh "timeout 60s bash -c 'until nc -zv ${env.STAGING_IP} 22; do sleep 5; done' || true"
-                            
-                            // Run playbook
-                            sh "ansible-playbook -i inventory setup.yml"
-                        }
-                    }
+                    // This runs Unit -> Integration -> E2E
+                    runTestSuite(env.CURRENT_IP, false)
+                }
+            }
+            post {
+                always {
+                    script { harvestLogs(env.CURRENT_IP, "staging") }
                 }
             }
         }
 
-        stage('E2E Tests') {
-            when { expression { return currentBuild.result == null || currentBuild.result == 'SUCCESS' } }
+        // --- DEBUG GATEWAY (Comment this stage out later to automate) ---
+        stage('Manual Approval / Debug') {
             steps {
-                catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
-                    // --- DEVOPS CHANGE: Running E2E against the Dynamic Staging Instance ---
-                    sh """
-                        . ${VENV}/bin/activate
-                        export APP_URL="http://${env.STAGING_IP}:5000"
-                        pytest tests/e2e --html=${REPORTS_DIR}/e2e_report.html --self-contained-html
-                    """
+                timeout(time: 1, unit: 'HOURS') {
+                    input message: "Staging is ready at http://${env.CURRENT_IP}:5000. Logs available in Artifacts. Proceed to Production?", ok: "Proceed"
                 }
             }
         }
 
-        stage('Performance Tests') {
-            when { 
-                all {
-                    expression { return currentBuild.result == null || currentBuild.result == 'SUCCESS' }
-                    branch 'production' 
+        stage('Staging: Cleanup') {
+            steps {
+                script {
+                    destroyInfra("staging")
+                    env.CURRENT_IP = ""
                 }
             }
+        }
+
+        // ==========================================
+        // PRODUCTION PHASE
+        // ==========================================
+
+        stage('Production: Provision') {
             steps {
-                catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
-                    sh '''
-                        . ${VENV}/bin/activate
-                        python3 main.py &
-                        APP_PID=$!
-                        sleep 3
-                        locust -f tests/performance/locustfile.py --headless --users 5 --spawn-rate 1 --run-time 10s --host http://localhost:5000 --html ${REPORTS_DIR}/performance_report.html
-                        kill $APP_PID
-                    '''
+                script {
+                    env.ENVIRONMENT = "prod"
+                    provisionInfra("prod")
+                }
+            }
+        }
+
+        stage('Production: Configure') {
+            steps {
+                script { runAnsible(env.CURRENT_IP) }
+            }
+        }
+
+        stage('Production: Testing') {
+            steps {
+                script {
+                    runTestSuite(env.CURRENT_IP, true) // Includes Performance Tests
+                }
+            }
+            post {
+                always {
+                    script { harvestLogs(env.CURRENT_IP, "prod") }
                 }
             }
         }
         
         stage('Build & Release') {
-            when { expression { return currentBuild.result == null || currentBuild.result == 'SUCCESS' } }
             steps {
                 script {
                     withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
@@ -156,7 +152,7 @@ pipeline {
                         def jsonPayload = """
                             {
                               "tag_name": "v${env.BUILD_VERSION}",
-                              "target_commitish": "dev",
+                              "target_commitish": "main",
                               "name": "v${env.BUILD_VERSION}",
                               "body": "Automated release from Jenkins Build #${env.BUILD_NUMBER}",
                               "draft": false,
@@ -172,93 +168,119 @@ pipeline {
             }
         }
 
-        stage('Post Actions') {
+        stage('Production: Cleanup') {
             steps {
                 script {
-                    // Archive and publish all reports
-                    publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'unit_report.html', reportName: 'Unit Test Report'])
-                    publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'integration_report.html', reportName: 'Integration Test Report'])
-                    publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'e2e_report.html', reportName: 'E2E Test Report'])
-                    publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'performance_report.html', reportName: 'Performance Report'])
-                    
-                    //  Coverage Report button
-                    publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'htmlcov', reportFiles: 'index.html', reportName: 'Code Coverage Report'])
-
-                    if (currentBuild.result == 'SUCCESS' || currentBuild.result == null) {
-                        slackSend (color: '#00FF00', message: "✅ SUCCESS: Build #${env.BUILD_NUMBER} (${env.BUILD_VERSION}) passed!")
-                        
-                        // --- DEVOPS ENHANCEMENT: Email Notification (Gmail) ---
-                        // This sends a success report to the team.
-                        emailext (
-                            subject: "SUCCESS: Build #${env.BUILD_NUMBER} (${env.BUILD_VERSION})",
-                            body: """The build was successful!
-                                     Build Number: ${env.BUILD_NUMBER}
-                                     Version: ${env.BUILD_VERSION}
-                                     Branch: ${env.BRANCH_NAME}
-                                     Duration: ${currentBuild.durationString}
-                                     Build URL: ${env.BUILD_URL}""",
-                            to: 'your-email@gmail.com' // Replace with your actual email
-                        )
-                    } else {
-                        slackSend (color: '#FF0000', message: "❌ FAILURE: Build #${env.BUILD_NUMBER} stopped.\n📊 Dashboard: ${env.JOB_URL}")
-                        
-                        // --- DEVOPS ENHANCEMENT: Email Notification (Gmail) ---
-                        // This sends a failure report with details for debugging.
-                        emailext (
-                            subject: "FAILURE: Build #${env.BUILD_NUMBER} (${env.BUILD_VERSION})",
-                            body: """The build has FAILED.
-                                     Build Number: ${env.BUILD_NUMBER}
-                                     Version: ${env.BUILD_VERSION}
-                                     Branch: ${env.BRANCH_NAME}
-                                     Duration: ${currentBuild.durationString}
-                                     Build URL: ${env.BUILD_URL}
-                                     Please check the Jenkins logs for the failed stage.""",
-                            to: 'your-email@gmail.com' // Replace with your actual email
-                        )
-
-                        jiraNewIssue (
-                            site: 'JiraLocal', 
-                            issue: [
-                                fields: [
-                                    project: [ key: 'DEV' ], 
-                                    summary: "Build Failure: DevOps-Exercise #${env.BUILD_NUMBER}", 
-                                    description: "Pipeline stopped. Check build details: ${env.JOB_URL}",
-                                    issuetype: [ name: 'Bug' ]
-                                ]
-                            ]
-                        )
-                    }
+                    destroyInfra("prod")
+                    env.CURRENT_IP = ""
                 }
             }
         }
     } 
 
     post {
+        always {
+            script {
+                // Archive and publish all HTML reports
+                publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'unit_report.html', reportName: 'Unit Test Report'])
+                publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'integration_report.html', reportName: 'Integration Test Report'])
+                publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'e2e_report.html', reportName: 'E2E Test Report'])
+                publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'reports', reportFiles: 'performance_report.html', reportName: 'Performance Report'])
+                publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'htmlcov', reportFiles: 'index.html', reportName: 'Code Coverage Report'])
+            }
+        }
+        failure {
+            script {
+                slackSend (color: '#FF0000', message: "❌ FAILURE: Build #${env.BUILD_NUMBER} failed on ${env.ENVIRONMENT} phase.")
+                jiraNewIssue (
+                    site: 'JiraLocal', 
+                    issue: [
+                        fields: [
+                            project: [ key: 'DEV' ], 
+                            summary: "Build Failure: DevOps-Exercise #${env.BUILD_NUMBER}", 
+                            description: "Pipeline stopped. Check artifacts for remote_logs. Check build: ${env.JOB_URL}",
+                            issuetype: [ name: 'Bug' ]
+                        ]
+                    ]
+                )
+            }
+        }
+        success {
+            slackSend (color: '#00FF00', message: "✅ SUCCESS: Build #${env.BUILD_NUMBER} released to Production!")
+        }
         cleanup {
             script {
-                // --- DEVOPS ENHANCEMENT: Automated Infrastructure Cleanup ---
-                // We destroy the EC2 instance after tests to save AWS costs.
-                try {
-                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']]) {
-                        dir('terraform') {
-                            sh 'terraform destroy -auto-approve'
-                        }
-                    }
-                } catch (e) {
-                    echo "Cleanup warning (Terraform): ${e}"
-                }
-
-                try {
-                    withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                        sh "docker rmi ${DOCKER_USER}/devops-exercise:${env.BUILD_VERSION} || true"
-                        sh "docker rmi ${DOCKER_USER}/devops-exercise:latest || true"
-                    }
-                } catch (e) {
-                    echo "Cleanup warning: ${e}"
-                }
-                
+                // Final safety cleanup if the pipeline crashed before stage cleanup
+                if (env.CURRENT_IP) { destroyInfra(env.ENVIRONMENT) }
+                sh "docker system prune -f"
                 cleanWs()
             }
+        }
+    }
+}
+
+// --- HELPER FUNCTIONS ---
+
+def provisionInfra(envName) {
+    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']]) {
+        dir('terraform') {
+            sh 'terraform init'
+            sh "terraform apply -var='environment=${envName}' -auto-approve"
+            env.CURRENT_IP = sh(script: "terraform output -raw instance_public_ip", returnStdout: true).trim()
+        }
+    }
+}
+
+def runAnsible(ip) {
+    withCredentials([sshUserPrivateKey(credentialsId: 'jenkins-ssh-key', keyFileVariable: 'SSH_KEY_PATH')]) {
+        dir('ansible') {
+            sh "echo '[app]\n${ip} ansible_user=ubuntu ansible_ssh_private_key_file=${SSH_KEY_PATH}' > inventory"
+            sh "timeout 60s bash -c 'until nc -zv ${ip} 22; do sleep 5; done' || true"
+            sh "ansible-playbook -i inventory setup.yml"
+        }
+    }
+}
+
+def harvestLogs(ip, envName) {
+    if (ip) {
+        echo "Scraping logs from ${envName} machine (${ip})..."
+        try {
+            withCredentials([sshUserPrivateKey(credentialsId: 'jenkins-ssh-key', keyFileVariable: 'SSH_KEY_PATH')]) {
+                sh "ssh -i ${SSH_KEY_PATH} -o StrictHostKeyChecking=no ubuntu@${ip} 'journalctl -u flask-app --no-pager -n 200' > ${WORKSPACE}/${envName}_flask_logs.txt"
+                archiveArtifacts artifacts: "${envName}_flask_logs.txt", allowEmptyArchive: true
+            }
+        } catch (e) {
+            echo "Failed to harvest logs from ${envName}: ${e}"
+        }
+    }
+}
+
+def runUnitTests() {
+    sh ". ${VENV}/bin/activate && pytest tests/unit --cov=app --html=${REPORTS_DIR}/unit_report.html --self-contained-html"
+}
+
+def runIntegrationTests() {
+    sh ". ${VENV}/bin/activate && pytest tests/integration --html=${REPORTS_DIR}/integration_report.html --self-contained-html"
+}
+
+def runE2ETests(ip) {
+    sh ". ${VENV}/bin/activate && export APP_URL='http://${ip}:5000' && pytest tests/e2e --html=${REPORTS_DIR}/e2e_report.html --self-contained-html"
+}
+
+def runTestSuite(ip, isProd) {
+    // Fail-Fast: Any failure here stops the function immediately
+    runUnitTests()
+    runIntegrationTests()
+    runE2ETests(ip)
+    if (isProd) {
+        sh ". ${VENV}/bin/activate && locust -f tests/performance/locustfile.py --headless --users 10 --spawn-rate 2 --run-time 30s --host http://${ip}:5000 --html ${REPORTS_DIR}/performance_report.html"
+    }
+}
+
+def destroyInfra(envName) {
+    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']]) {
+        dir('terraform') {
+            sh "terraform destroy -var='environment=${envName}' -auto-approve"
         }
     }
 }

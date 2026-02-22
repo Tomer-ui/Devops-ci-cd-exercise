@@ -1,43 +1,47 @@
-# Start from the official Long Term Support (LTS) Jenkins image
-FROM jenkins/jenkins:lts
+# Pinning to a specific stable base (JDK 17 on Debian Bookworm)
+FROM jenkins/jenkins:lts-jdk17
 
-# Switch to root user to install system packages
 USER root
 
-# 1. Install system tools, Python 3, Firefox, and Ansible
+# 1. Install system tools and Python
+# We use python3-full to ensure we have all tools for venv
 RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
     python3-venv \
+    python3-full \
     firefox-esr \
     wget \
     curl \
     unzip \
     gnupg \
     software-properties-common \
-    ansible \
     netcat-traditional \
     lsb-release \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. Install Terraform
+# 2. Install Ansible via pip (more reliable than apt on Debian Testing/Trixie)
+# Note: --break-system-packages is required on newer Debian versions for global pip installs
+RUN python3 -m pip install --break-system-packages ansible
+
+# 3. Install Terraform
 RUN wget -O- https://apt.releases.hashicorp.com/gpg | gpg --dearmor | tee /usr/share/keyrings/hashicorp-archive-keyring.gpg && \
     echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/hashicorp.list && \
     apt-get update && apt-get install -y terraform
 
-# 3. Install Geckodriver (for E2E tests)
+# 4. Install Geckodriver (Improved robustness)
 RUN GECKODRIVER_VERSION=$(curl -s https://api.github.com/repos/mozilla/geckodriver/releases/latest | grep 'tag_name' | cut -d\" -f4) && \
-    wget https://github.com/mozilla/geckodriver/releases/download/$GECKODRIVER_VERSION/geckodriver-$GECKODRIVER_VERSION-linux64.tar.gz && \
+    wget -q https://github.com/mozilla/geckodriver/releases/download/$GECKODRIVER_VERSION/geckodriver-$GECKODRIVER_VERSION-linux64.tar.gz && \
     tar -xvzf geckodriver-$GECKODRIVER_VERSION-linux64.tar.gz && \
     mv geckodriver /usr/local/bin/ && \
     chmod +x /usr/local/bin/geckodriver && \
     rm geckodriver-$GECKODRIVER_VERSION-linux64.tar.gz
 
-# 4. Install Docker CLI
+# 5. Install Docker CLI (We only need the CLI, ignore 'service' warnings)
 RUN curl -fsSL https://get.docker.com -o get-docker.sh && sh get-docker.sh
 
-# 5. Add the 'jenkins' user to the 'docker' group
+# 6. Group Management
+# Add jenkins user to docker group
 RUN usermod -aG docker jenkins
 
-# Switch back to the standard jenkins user for security
 USER jenkins
