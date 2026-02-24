@@ -63,6 +63,17 @@
         group: ubuntu
         mode: '0755'
 
+    - name: Check if application directory is a git repo
+      stat:
+        path: "{{ app_dir }}/.git"
+      register: git_repo_dir
+
+    - name: Clean up non-git application directory
+      file:
+        path: "{{ app_dir }}"
+        state: absent
+      when: not git_repo_dir.stat.exists
+
     - name: Deploy application code via Git
       git:
         repo: "{{ repo_url }}"
@@ -101,7 +112,8 @@
           Group=ubuntu
           WorkingDirectory={{ app_dir }}
           Environment="PATH={{ venv_path }}/bin"
-          ExecStart={{ venv_path }}/bin/gunicorn --workers 3 --bind 0.0.0.0:5000 main:create_app()
+          Environment="PYTHONPATH={{ app_dir }}"
+          ExecStart={{ venv_path }}/bin/gunicorn --workers 3 --bind 0.0.0.0:5000 'main:create_app()'
 
           [Install]
           WantedBy=multi-user.target
