@@ -23,17 +23,22 @@
           - software-properties-common
         state: present
 
-    - name: Add Mozilla Team PPA for Firefox ESR
-      apt_repository:
-        repo: ppa:mozillateam/ppa
+    - name: Install Firefox ESR
+      apt:
+        name: firefox-esr
         state: present
 
-    - name: Install Firefox ESR and Geckodriver
-      apt:
-        name:
-          - firefox-esr
-          - geckodriver
-        state: present
+    - name: Download Geckodriver
+      get_url:
+        url: "https://github.com/mozilla/geckodriver/releases/download/v0.34.0/geckodriver-v0.34.0-linux64.tar.gz"
+        dest: "/tmp/geckodriver.tar.gz"
+
+    - name: Unarchive Geckodriver
+      unarchive:
+        src: "/tmp/geckodriver.tar.gz"
+        dest: "/usr/local/bin"
+        remote_src: yes
+        mode: '0755'
 
     - name: Create application directory
       file:
