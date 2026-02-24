@@ -5,6 +5,7 @@
   vars:
     app_dir: /opt/devops-app
     venv_path: "{{ app_dir }}/venv"
+    repo_url: "https://github.com/Tomer-ui/Devops-ci-cd-exercise.git"
 
   tasks:
     - name: Update apt cache
@@ -23,10 +24,24 @@
           - software-properties-common
         state: present
 
+    - name: Add Mozilla Team PPA for Firefox ESR
+      apt_repository:
+        repo: ppa:mozillateam/ppa
+        state: present
+
+    - name: Prioritize Mozilla PPA over Ubuntu Snaps
+      copy:
+        dest: /etc/apt/preferences.d/mozillateam-ppa
+        content: |
+          Package: firefox*
+          Pin: release o=LP-PPA-mozillateam
+          Pin-Priority: 1001
+
     - name: Install Firefox ESR
       apt:
         name: firefox-esr
         state: present
+        update_cache: yes
 
     - name: Download Geckodriver
       get_url:
@@ -48,16 +63,20 @@
         group: ubuntu
         mode: '0755'
 
-    - name: Copy application code
-      copy:
-        src: ../
-        dest: "{{ app_dir }}/"
+    - name: Deploy application code via Git
+      git:
+        repo: "{{ repo_url }}"
+        dest: "{{ app_dir }}"
+        version: main
+        force: yes
+
+    - name: Ensure application directory permissions
+      file:
+        path: "{{ app_dir }}"
+        state: directory
         owner: ubuntu
         group: ubuntu
-        mode: '0644'
-      # Skip some files if possible, but copy is simple. 
-      # Note: this will copy the whole repo, including .git and terraform/
-      # In a real scenario, we'd use git or be more selective.
+        recurse: yes
 
     - name: Create virtual environment
       command: "python3 -m venv {{ venv_path }}"
