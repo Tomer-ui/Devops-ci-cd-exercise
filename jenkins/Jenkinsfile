@@ -20,11 +20,17 @@ pipeline {
     
     stages {
         stage('Initialize') {
-            when { branch 'main' }
+            when { 
+                anyOf {
+                    branch 'main'
+                    branch 'master'
+                    branch 'origin/main'
+                }
+            }
             steps {
                 script {
                     echo "========================================"
-                    echo "   THE GRAND MACHINE IS RUNNING V3.0    "
+                    echo "   THE GRAND MACHINE IS RUNNING V3.1    "
                     echo "========================================"
                     System.setProperty("hudson.model.DirectoryBrowserSupport.CSP", "")
                     sh "mkdir -p ${REPORTS_DIR}"
@@ -54,7 +60,8 @@ pipeline {
             steps {
                 script {
                     env.ENVIRONMENT = "staging"
-                    provisionInfra("staging")
+                    env.CURRENT_IP = provisionInfra("staging")
+                    echo "Global IP set to: ${env.CURRENT_IP}"
                 }
             }
         }
@@ -105,7 +112,7 @@ pipeline {
             steps {
                 script {
                     env.ENVIRONMENT = "prod"
-                    provisionInfra("prod")
+                    env.CURRENT_IP = provisionInfra("prod")
                 }
             }
         }
@@ -246,7 +253,7 @@ def provisionInfra(envName) {
             if (!ip || ip == "null" || ip == "" || ip.contains("Error")) {
                 error "CRITICAL: IP capture failed. Result was: '${ip}'"
             }
-            env.CURRENT_IP = ip
+            return ip
         }
     }
 }
