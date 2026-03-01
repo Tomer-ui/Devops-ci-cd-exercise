@@ -229,11 +229,17 @@ def provisionInfra(envName) {
         dir('terraform') {
             sh 'terraform init'
             sh "terraform apply -var='environment=${envName}' -auto-approve"
+            sh 'terraform refresh' // Ensure the state matches the real AWS world
+            
+            // Debugging: Print all outputs to the Jenkins console
+            sh 'terraform output' 
+            
             def ip = sh(script: "terraform output -raw instance_public_ip", returnStdout: true).trim()
-            if (!ip || ip == "null") {
-                error "Failed to retrieve a valid Public IP from Terraform!"
+            if (!ip || ip == "null" || ip.contains("Error")) {
+                error "CRITICAL: Terraform returned an invalid IP: '${ip}'. Check AWS Console for instance status."
             }
             env.CURRENT_IP = ip
+            echo "Successfully captured IP: ${env.CURRENT_IP}"
         }
     }
 }
