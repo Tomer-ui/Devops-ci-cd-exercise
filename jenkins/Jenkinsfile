@@ -23,6 +23,9 @@ pipeline {
             when { branch 'main' }
             steps {
                 script {
+                    echo "========================================"
+                    echo "   THE GRAND MACHINE IS RUNNING V3.0    "
+                    echo "========================================"
                     System.setProperty("hudson.model.DirectoryBrowserSupport.CSP", "")
                     sh "mkdir -p ${REPORTS_DIR}"
                     def newVersion = sh(script: "python3 scripts/semver.py", returnStdout: true).trim()
