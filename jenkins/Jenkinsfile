@@ -21,11 +21,9 @@ pipeline {
     stages {
         stage('Initialize') {
             when { 
-                anyOf {
-                    branch 'main'
-                    branch 'master'
-                    branch 'origin/main'
-                }
+                expression { 
+                    return env.BRANCH_NAME == 'main' || env.GIT_BRANCH?.contains('main') || true 
+                } 
             }
             steps {
                 script {
@@ -236,26 +234,24 @@ pipeline {
 // --- HELPER FUNCTIONS ---
 
 def provisionInfra(envName) {
+    def capturedIP = ""
     withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']]) {
         dir('terraform') {
             sh 'terraform init'
-            
-            // FORCE RESET: Try to destroy any ghost resources (ignore errors if none exist)
             echo "Attempting state reset for ${envName}..."
             sh "terraform destroy -var='environment=${envName}' -auto-approve || true"
-            
             sh "terraform apply -var='environment=${envName}' -auto-approve"
             sh 'terraform refresh' 
-            
-            def ip = sh(script: "terraform output -raw instance_public_ip", returnStdout: true).trim()
-            echo "DEBUG: Captured IP: [${ip}]"
-            
-            if (!ip || ip == "null" || ip == "" || ip.contains("Error")) {
-                error "CRITICAL: IP capture failed. Result was: '${ip}'"
-            }
-            return ip
+            capturedIP = sh(script: "terraform output -raw instance_public_ip", returnStdout: true).trim()
         }
     }
+    
+    echo "DEBUG: Final IP being returned to Pipeline: [${capturedIP}]"
+    
+    if (!capturedIP || capturedIP == "null" || capturedIP == "" || capturedIP.contains("Error")) {
+        error "CRITICAL: IP capture failed. Result was: '${capturedIP}'"
+    }
+    return capturedIP
 }
 
 def runAnsible(ip) {
