@@ -1,3 +1,4 @@
+// HEARTBEAT: Force-refreshing the Grand Machine state
 pipeline {
     agent any
 
