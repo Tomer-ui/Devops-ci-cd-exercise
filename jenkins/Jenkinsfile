@@ -211,7 +211,10 @@ pipeline {
         cleanup {
             script {
                 // Final safety cleanup if the pipeline crashed before stage cleanup
-                if (env.CURRENT_IP) { destroyInfra(env.ENVIRONMENT) }
+                if (env.ENVIRONMENT) { 
+                    echo "Ensuring cleanup for environment: ${env.ENVIRONMENT}"
+                    destroyInfra(env.ENVIRONMENT) 
+                }
                 sh "docker system prune -f"
                 cleanWs()
             }
@@ -226,7 +229,11 @@ def provisionInfra(envName) {
         dir('terraform') {
             sh 'terraform init'
             sh "terraform apply -var='environment=${envName}' -auto-approve"
-            env.CURRENT_IP = sh(script: "terraform output -raw instance_public_ip", returnStdout: true).trim()
+            def ip = sh(script: "terraform output -raw instance_public_ip", returnStdout: true).trim()
+            if (!ip || ip == "null") {
+                error "Failed to retrieve a valid Public IP from Terraform!"
+            }
+            env.CURRENT_IP = ip
         }
     }
 }

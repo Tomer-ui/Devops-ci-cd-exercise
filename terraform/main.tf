@@ -30,10 +30,11 @@ resource "aws_security_group" "app_sg" {
 
 # The Instance: "The Server"
 resource "aws_instance" "app_server" {
-  ami                    = var.ami_id
-  instance_type          = var.instance_type
-  vpc_security_group_ids = [aws_security_group.app_sg.id]
-  key_name               = "jenkins-key" # This MUST exist in your AWS account
+  ami                         = var.ami_id
+  instance_type               = var.instance_type
+  vpc_security_group_ids      = [aws_security_group.app_sg.id]
+  key_name                    = "jenkins-key" # This MUST exist in your AWS account
+  associate_public_ip_address = true
 
   tags = {
     Name        = "${var.instance_name}-${var.environment}"
